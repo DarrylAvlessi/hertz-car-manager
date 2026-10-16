@@ -16,6 +16,8 @@ This is the canonical project structure. Start with task-relevant files below. O
 - `src/main.tsx` - React entrypoint; imports `src/index.css` and mounts `src/app/router.tsx` into the `#root` element
 - `src/app/router.tsx` - React Router routes (`/`, `/connexion`, `/dashboard/*` protégé)
 - `src/features/` - Pages par domaine : `marketing/HomePage`, `auth/LoginPage`, `dashboard/DashboardLayout + pages/`
+- `src/shared/api/` - Client HTTP vers hertz-server (JWT Bearer, `VITE_API_URL`)
+- `server/` - Backend Express + TS strict (lot Darryl) : voir `server/README.md` pour l'API et le contrat d'extension (lots Abel/Prince)
 - `src/index.css` - Global CSS entrypoint and Tailwind CSS v4 import
 - `index.html` - Vite HTML shell containing the `#root` element and loading `src/main.tsx`
 - `package.json` - Project dependencies and the Vite build, development, preview, and formatting scripts

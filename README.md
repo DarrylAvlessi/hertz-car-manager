@@ -3,10 +3,12 @@
 Solution interne de gestion des activités de location **Hertz Bénin** : véhicules, locations,
 réservations, clients, commerciaux et statistiques — pilotés depuis un espace de gestion unique.
 
-Application React pur (découplée de Figma Make), avec navigation par routes, espace protégé par
-authentification simulée et données mockées typées, prêtes à être branchées sur une API réelle.
+Application React + backend Express (lot Darryl), avec navigation par routes, espace protégé par
+authentification JWT et données servies par API (driver mémoire ou MySQL).
 
 ## Stack
+
+### Frontend
 
 - **Runtime :** React 19 + React DOM 19
 - **Routing :** React Router 7 (`createBrowserRouter`)
@@ -16,20 +18,33 @@ authentification simulée et données mockées typées, prêtes à être branch�
 - **Formatage :** oxfmt
 - **Package manager :** npm (`package-lock.json`), Node 22
 
+### Backend (`server/`, lot Darryl)
+
+- **Runtime :** Express 4 + TypeScript strict (dev via `tsx`, build `tsc`)
+- **Base :** MySQL 8 (`mysql2`) **ou** mémoire seedée (`DB_DRIVER`, voir ci-dessous)
+- **Auth :** JWT (`jsonwebtoken`) + bcrypt (`bcryptjs`), rôles `responsable` / `admin`
+- **Validation :** `zod` · **PDF :** `pdfkit` (fiches clients, rapports d'activité)
+
 ## Prérequis
 
 - Node.js 22
 - npm (fourni avec Node)
+- MySQL 8 **optionnel pour l'instant** (via `server/docker-compose.yml`) :
+  le backend démarre sans MySQL en mode mémoire (`DB_DRIVER=memory`, données démo).
 
 ## Démarrage
 
 ```bash
 npm install
-npm run dev      # serveur Vite sur http://localhost:8443
-npm run build    # build production dans dist/
-npm run preview  # prévisualiser le build
-npm run format   # formater le code (oxfmt)
+npm run dev          # frontend Vite sur http://localhost:8443
+npm run server:dev   # backend Express sur http://localhost:3001 (2e terminal)
+npm run build        # build production frontend dans dist/
+npm run preview      # prévisualiser le build
+npm run format       # formater le code (oxfmt)
 ```
+
+Le frontend appelle le backend via `VITE_API_URL` (défaut `http://localhost:3001`,
+voir `.env.example`). Sans backend démarré, les pages affichent « Serveur injoignable ».
 
 > Si un serveur de dev tournait avec l'ancienne config, redémarrez-le pour prendre en compte le
 > `vite.config.ts` actuel.
@@ -45,7 +60,7 @@ src/
     marketing/
       HomePage.tsx            # page d'accueil publique
     auth/
-      AuthContext.tsx        # session simulée (contexte + localStorage)
+      AuthContext.tsx        # session JWT (login/logout, token persisté)
       ProtectedRoute.tsx     # garde des routes /dashboard
       LoginPage.tsx          # page de connexion
     dashboard/
@@ -53,12 +68,13 @@ src/
       components/AddModal.tsx
       pages/                  # OverviewPage, GenericTablePage, StatisticsPage, ModuleRoutes
   shared/
+    api/            # client HTTP (JWT Bearer, erreurs normalisées, URLs d'export)
     components/     # Icon, Logo, StatusBadge, WidgetTitle
-    data/           # types.ts, mockData.ts, dashboardService.ts
-    hooks/          # useQueryFilter
+    data/           # types.ts, mockData.ts (photos + icônes), dashboardService.ts (HTTP)
     pages/          # NotFoundPage (404)
   main.tsx          # entrypoint : AuthProvider + RouterProvider
   index.css         # CSS historique + import Tailwind
+server/             # backend Express (voir server/README.md : API, contrat Abel/Prince)
 ```
 
 ## Routes
@@ -78,21 +94,22 @@ src/
 
 ## Authentification
 
-Authentification **simulée** (aucun backend) : `AuthContext` crée une session
-(`responsable@hertz.bj` / `hertz2025` pré-remplis), persistée en `localStorage` (clé
-`hertz-auth-user`). `ProtectedRoute` redirige vers `/connexion` si non connecté. Pour une auth
-réelle (JWT, SSO…), remplacer `login`/`logout`/`readStoredUser` par des appels API.
+Authentification **JWT via le backend** (`POST /api/auth/login`) : `AuthContext` stocke le token
+(`hertz-auth-token`) et le profil (`hertz-auth-user`), `ProtectedRoute` redirige vers `/connexion`
+si non connecté. Compte démo seedé : `responsable@hertz.bj` / `hertz2025`.
 
 ## Données
 
-Données **mockées et typées** dans `src/shared/data/` :
+Données servies par **hertz-server** (`src/shared/data/dashboardService.ts` mappe le JSON en
+lignes de tableaux) :
 
-- `types.ts` — `DashboardModule`, `TableModule`, `TableData`, `AuthUser`
-- `mockData.ts` — jeux de données (commerciaux, véhicules, locations, réservations, clients)
-- `dashboardService.ts` — `getTable()`, `filterRows()` (recherche), `getRecentLocations()`
+- `shared/api/client.ts` — `apiFetch()` (Bearer auto), `ApiError`, `exportUrl()` (PDF)
+- `shared/data/types.ts` — `DashboardModule`, `TableModule`, `TableData`, `AuthUser`
+- `shared/data/dashboardService.ts` — `fetchTable()`, `filterTable()`, `fetchOverviewStats()`,
+  `fetchRecentLocations()`, `fetchMonthly()`
 
 La recherche du header filtre les lignes du module courant (insensible à la casse).
-Pour brancher un backend : conserver les types et remplacer le service par des appels `fetch`.
+Détail des endpoints : voir `server/README.md`.
 
 ## Styling
 
@@ -111,6 +128,10 @@ Servir `dist/` avec n'importe quel hébergeur statique **avec fallback SPA** (to
 
 ## Statut et limites connues
 
-- Pas de backend : auth simulée, données en dur, ajout via modale non persisté.
+- MySQL non encore branché : le backend tourne en mémoire seedée (`DB_DRIVER=memory`) ;
+  `docker compose up -d` + `npm run server:migrate` dans `server/` pour basculer.
+- Écritures limitées au CRUD véhicules (référence) : clients/locations/réservations/maintenances
+  en lecture seule — lots Abel & Prince.
+- Pastille flotte détaillée (En location / Entretien / Indisponibles) encore statique côté
+  Vue d'ensemble — endpoint `GET /api/stats/fleet` à ajouter.
 - Images hero/login chargées depuis Unsplash (prévoir un fallback hors-ligne si besoin).
-- Dossier `.figma/` (outillage Figma Make) découplé du build, en attente de suppression.
