@@ -12,13 +12,22 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const [showPassword, setShowPassword] = useState(false)
   const [email, setEmail] = useState("responsable@hertz.bj")
+  const [password, setPassword] = useState("hertz2025")
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
 
   if (isAuthenticated) return <Navigate to={ROUTES.dashboard} replace />
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    login(email)
-    navigate(ROUTES.dashboard)
+    setError(null)
+    setPending(true)
+    login(email, password)
+      .then(() => navigate(ROUTES.dashboard))
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Connexion impossible")
+        setPending(false)
+      })
   }
 
   return (
@@ -39,24 +48,20 @@ export default function LoginPage() {
             <br />
             avec confiance.
           </h1>
-          <p>
-            Des données fiables pour des décisions plus rapides et un meilleur
-            service client.
-          </p>
+          <p>Des données fiables pour des décisions plus rapides et un meilleur service client.</p>
         </div>
       </section>
       <section className="login-panel">
-        <Link
-          to={ROUTES.home}
-          className="back-home"
-          style={{ textDecoration: "none" }}
-        >
+        <Link to={ROUTES.home} className="back-home" style={{ textDecoration: "none" }}>
           ← Retour à l’accueil
         </Link>
         <form onSubmit={submit}>
           <p className="kicker">ACCÈS RESPONSABLE</p>
           <h2>Connexion</h2>
           <p>Renseignez vos identifiants pour accéder à votre espace.</p>
+          {error && (
+            <p className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-800">{error}</p>
+          )}
           <label>
             <span>Adresse e-mail</span>
             <input
@@ -71,13 +76,11 @@ export default function LoginPage() {
             <div>
               <input
                 type={showPassword ? "text" : "password"}
-                defaultValue="hertz2025"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 required
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-              >
+              <button type="button" onClick={() => setShowPassword(!showPassword)}>
                 {showPassword ? "Masquer" : "Afficher"}
               </button>
             </div>
@@ -88,12 +91,10 @@ export default function LoginPage() {
             </label>
             <button type="button">Mot de passe oublié ?</button>
           </div>
-          <button className="primary full" type="submit">
-            Se connecter <Icon name="arrow" />
+          <button className="primary full" type="submit" disabled={pending}>
+            {pending ? "Connexion…" : "Se connecter"} <Icon name="arrow" />
           </button>
-          <p className="security-note">
-            Accès réservé au personnel autorisé de Hertz Bénin.
-          </p>
+          <p className="security-note">Accès réservé au personnel autorisé de Hertz Bénin.</p>
         </form>
       </section>
     </main>

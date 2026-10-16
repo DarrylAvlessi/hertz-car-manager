@@ -1,27 +1,69 @@
+import { useEffect, useState } from "react"
 import Icon from "@/shared/components/Icon"
 import StatusBadge from "@/shared/components/StatusBadge"
 import WidgetTitle from "@/shared/components/WidgetTitle"
-import { getRecentLocations } from "@/shared/data/dashboardService"
-
-const STATS: Array<[string, string, string, string, string]> = [
-  ["Chiffre d’affaires", "18,4 M", "FCFA", "+12,6%", "stats"],
-  ["Véhicules disponibles", "38", "sur 64", "59% du parc", "car"],
-  ["Locations actives", "24", "contrats", "+3 aujourd’hui", "rental"],
-  ["Réservations en attente", "7", "demandes", "2 prioritaires", "booking"],
-]
+import {
+  fetchOverviewStats,
+  fetchRecentLocations,
+  formatCompactMillions,
+  type OverviewStats,
+  type TableResult,
+} from "@/shared/data/dashboardService"
 
 const DAYS = ["Jeu", "Ven", "Sam", "Dim", "Lun", "Mar", "Mer"]
 const BARS = [42, 62, 48, 78, 55, 91, 72]
 
-export default function OverviewPage({
-  onSeeLocations,
-}: {
-  onSeeLocations: () => void
-}) {
+export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () => void }) {
+  const [stats, setStats] = useState<OverviewStats | null>(null)
+  const [recent, setRecent] = useState<TableResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    Promise.all([fetchOverviewStats(), fetchRecentLocations(3)])
+      .then(([s, r]) => {
+        if (!alive) return
+        setStats(s)
+        setRecent(r)
+      })
+      .catch((e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : "Chargement impossible")
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (error) {
+    return (
+      <section className="data-card">
+        <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <strong>Chargement impossible :</strong> {error}
+        </div>
+      </section>
+    )
+  }
+
+  if (!stats || !recent) {
+    return (
+      <section className="data-card">
+        <p className="p-4 text-sm text-neutral-500">Chargement de l’activité…</p>
+      </section>
+    )
+  }
+
+  const partDisponible = Math.round((stats.vehiculesDisponibles / Math.max(1, stats.vehiculesTotal)) * 100)
+  const cards: Array<[string, string, string, string, string]> = [
+    ["Chiffre d’affaires", formatCompactMillions(stats.caTotal), stats.devise, stats.caCroissance, "stats"],
+    ["Véhicules disponibles", String(stats.vehiculesDisponibles), `sur ${stats.vehiculesTotal}`, `${partDisponible}% du parc`, "car"],
+    ["Locations actives", String(stats.locationsActives), "contrats", "+3 aujourd’hui", "rental"],
+    ["Réservations en attente", String(stats.reservationsEnAttente), "demandes", "2 prioritaires", "booking"],
+  ]
+
   return (
     <>
       <section className="stats-grid">
-        {STATS.map(([label, value, unit, trend, icon]) => (
+        {cards.map(([label, value, unit, trend, icon]) => (
           <article key={label}>
             <div className="stat-icon">
               <Icon name={icon} />
@@ -59,20 +101,17 @@ export default function OverviewPage({
           </div>
         </article>
         <article className="fleet-widget">
-          <WidgetTitle
-            title="État de la flotte"
-            subtitle="64 véhicules au total"
-          />
+          <WidgetTitle title="État de la flotte" subtitle={`${stats.vehiculesTotal} véhicules au total`} />
           <div className="donut">
             <div>
-              <strong>59%</strong>
+              <strong>{partDisponible}%</strong>
               <span>disponibles</span>
             </div>
           </div>
           <div className="legend">
             <p>
               <i className="l1" />
-              Disponibles <strong>38</strong>
+              Disponibles <strong>{stats.vehiculesDisponibles}</strong>
             </p>
             <p>
               <i className="l2" />
@@ -107,16 +146,16 @@ export default function OverviewPage({
             </tr>
           </thead>
           <tbody>
-            {getRecentLocations().map((r) => (
+            {recent.rows.map((r) => (
               <tr key={r[0]}>
                 <td>
                   <strong>{r[0]}</strong>
                 </td>
                 <td>{r[1]}</td>
                 <td>{r[2]}</td>
-                <td>{r[4]}</td>
+                <td>{r[3]}</td>
                 <td>
-                  <StatusBadge value={r[5]} />
+                  <StatusBadge value={r[4]!} />
                 </td>
               </tr>
             ))}
