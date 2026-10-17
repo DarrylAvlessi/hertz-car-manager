@@ -10,7 +10,9 @@ import type { DashboardModule } from "@/shared/data/types"
 
 export interface DashboardOutletContext {
   query: string
+  refreshKey: number
   onAdd: () => void
+  onClientCreated: () => void
   onSeeLocations: () => void
 }
 
@@ -39,6 +41,7 @@ export default function DashboardLayout() {
   const location = useLocation()
   const [query, setQuery] = useState("")
   const [modal, setModal] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const module = moduleFromPath(location.pathname)
   const subtitle = useMemo(
@@ -53,10 +56,12 @@ export default function DashboardLayout() {
   const outletContext: DashboardOutletContext = useMemo(
     () => ({
       query,
+      refreshKey,
       onAdd: () => setModal(true),
+      onClientCreated: () => setRefreshKey((current) => current + 1),
       onSeeLocations: () => navigate(ROUTES.locations),
     }),
-    [query, navigate],
+    [query, refreshKey, navigate],
   )
 
   const handleLogout = () => {
@@ -145,7 +150,13 @@ export default function DashboardLayout() {
         </div>
       </section>
 
-      {modal && <AddModal module={module} close={() => setModal(false)} />}
+      {modal && (
+        <AddModal
+          module={module}
+          close={() => setModal(false)}
+          onCreated={outletContext.onClientCreated}
+        />
+      )}
     </main>
   )
 }

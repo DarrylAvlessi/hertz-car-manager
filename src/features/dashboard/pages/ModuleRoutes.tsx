@@ -13,8 +13,8 @@ function makeTableRoute(
   module: "Commerciaux" | "Véhicules" | "Locations" | "Réservations" | "Clients",
 ) {
   return function TableRoute() {
-    const { query, onAdd } = useOutletContext<DashboardOutletContext>()
-    return <GenericTablePage module={module} query={query} onAdd={onAdd} />
+    const { query, refreshKey, onAdd } = useOutletContext<DashboardOutletContext>()
+    return <GenericTablePage module={module} query={query} refreshKey={refreshKey} onAdd={onAdd} />
   }
 }
 

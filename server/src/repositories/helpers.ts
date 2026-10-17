@@ -1,5 +1,12 @@
 import type { Performance } from "./types.js"
 
+export class AvailabilityConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "AvailabilityConflictError"
+  }
+}
+
 // Seuils alignés sur le prototype : 38 Excellent, 31 Très bien, 25 Bien, 17 À suivre.
 export function performanceOf(locationsConclues: number): Performance {
   if (locationsConclues >= 35) return "Excellent"

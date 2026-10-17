@@ -93,7 +93,7 @@ export function vehiculesRouter(repos: Repositories, env: Env): Router {
     asyncHandler(async (req, res) => {
       const exists = await repos.vehicules.findByImmatriculation(req.body.immatriculation)
       if (exists) throw conflict("Immatriculation déjà enregistrée")
-      const created = await repos.vehicules.create(req.body)
+      const created = await repos.vehicules.create(req.body, req.user!.id)
       res.status(201).json(created)
     }),
   )

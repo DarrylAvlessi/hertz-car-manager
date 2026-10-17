@@ -10,14 +10,36 @@ npm install
 npm run dev            # http://localhost:3001, driver=memory seedé
 ```
 
-## Brancher MySQL (plus tard)
+## Utiliser la base Hertz existante
+
+Pour utiliser la base XAMPP existante `gestion_location_hertz`, configurez
+`server/.env` avec `DB_DRIVER=mysql`, `DB_HOST`, `DB_PORT`, `DB_USER`,
+`DB_PASSWORD`, `DB_NAME=gestion_location_hertz` et `JWT_SECRET`, puis lancez
+`npm run dev --prefix server`.
+
+La base existante contient déjà ses données : ne lancez ni `db:migrate` ni
+`db:import-parc` dessus. `db:migrate` refuse désormais toute base qui contient
+déjà des tables, vues, procédures, triggers ou événements. Le dépôt MySQL est
+adapté au schéma détaillé Hertz pour les listes, les fiches, les statistiques,
+la disponibilité, ainsi que la création de clients et de véhicules. Les autres
+opérations d'écriture ne sont pas encore implémentées.
+
+## Initialiser une nouvelle base vide
+
+Configurez `server/.env` avec `DB_DRIVER=mysql`, les identifiants MySQL et un
+`DB_NAME` autorisé, puis exécutez les commandes depuis `server/` :
 
 ```bash
-docker compose up -d
-# renseigner server/.env : DB_DRIVER=mysql (+ identifiants si différents)
-npm run db:migrate      # schéma + seed idempotent
-npm run dev
+npm run db:migrate       # schema.sql puis données de référence seed.sql
+npm run db:import-parc   # optionnel : agents, clients et parc initial
 ```
+
+La migration ne fonctionne que sur une base sans aucun objet ; le seed est
+destiné à cette initialisation unique, pas à être rejoué. Le compte
+`admin@exemple.local` est créé avec un hash volontairement inutilisable :
+remplacez-le par un vrai hash avant toute connexion. L'import du parc vérifie
+que ses tables cibles sont vides, utilise une transaction et refuse les
+réimportations. N'exécutez pas directement le fichier SQL d'import.
 
 ## Scripts
 
@@ -27,7 +49,8 @@ npm run dev
 | `npm run build`   | compile vers `dist/` (tsc strict)                  |
 | `npm run start`   | lance `dist/index.js` (prod)                       |
 | `npm run typecheck` | vérification TypeScript sans émission            |
-| `npm run db:migrate` | exécute `schema.sql` + `seed.sql` (MySQL requis) |
+| `npm run db:migrate` | initialise uniquement une base vide avec le schéma détaillé et les références |
+| `npm run db:import-parc` | importe le jeu agents/parc une seule fois, avec contrôles et transaction |
 
 ## API (base `/api`, JWT Bearer sauf `/health`)
 

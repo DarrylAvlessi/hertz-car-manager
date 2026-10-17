@@ -7,7 +7,8 @@ function getKind(value: string): StatusKind {
     )
   )
     return "success"
-  if (["Entretien", "Non aboutie", "À suivre"].includes(value)) return "danger"
+  if (["Entretien", "En retard", "Expirée", "Non aboutie", "À suivre"].includes(value))
+    return "danger"
   return "warning"
 }
 

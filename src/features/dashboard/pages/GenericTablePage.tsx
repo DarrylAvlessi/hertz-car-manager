@@ -8,10 +8,12 @@ import type { TableModule } from "@/shared/data/types"
 export default function GenericTablePage({
   module,
   query,
+  refreshKey,
   onAdd,
 }: {
   module: TableModule
   query: string
+  refreshKey: number
   onAdd: () => void
 }) {
   const [data, setData] = useState<TableResult | null>(null)
@@ -31,7 +33,7 @@ export default function GenericTablePage({
     return () => {
       alive = false
     }
-  }, [module])
+  }, [module, refreshKey])
 
   const filtered = useMemo(() => (data ? filterTable(data, query) : null), [data, query])
 
