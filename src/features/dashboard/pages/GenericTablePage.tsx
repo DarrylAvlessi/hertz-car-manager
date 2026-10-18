@@ -1,47 +1,80 @@
 import { useEffect, useMemo, useState } from "react"
+
 import Icon from "@/shared/components/Icon"
+
 import StatusBadge from "@/shared/components/StatusBadge"
-import { exportUrl } from "@/shared/api/client"
-import { fetchTable, filterTable, type TableResult } from "@/shared/data/dashboardService"
+
+import {
+  fetchTable,
+  filterTable,
+  type TableResult,
+} from "@/shared/data/dashboardService"
+
 import type { TableModule } from "@/shared/data/types"
+
+import ClientCommercialModal from "../components/ClientCommercialModal"
+
+type ManagedModule = "Clients" | "Commerciaux"
 
 export default function GenericTablePage({
   module,
+
   query,
+
   refreshKey,
+
   onAdd,
 }: {
   module: TableModule
+
   query: string
+
   refreshKey: number
+
   onAdd: () => void
 }) {
   const [data, setData] = useState<TableResult | null>(null)
+
   const [error, setError] = useState<string | null>(null)
+
+  const [localRefreshKey, setLocalRefreshKey] = useState(0)
+
+  const [selectedRecord, setSelectedRecord] = useState<{
+    id: number
+
+    mode: "details" | "edit"
+  } | null>(null)
 
   useEffect(() => {
     let alive = true
+
     setData(null)
+
     setError(null)
+
     fetchTable(module)
+
       .then((d) => {
         if (alive) setData(d)
       })
+
       .catch((e: unknown) => {
-        if (alive) setError(e instanceof Error ? e.message : "Chargement impossible")
+        if (alive)
+          setError(e instanceof Error ? e.message : "Chargement impossible")
       })
+
     return () => {
       alive = false
     }
-  }, [module, refreshKey])
+  }, [module, refreshKey, localRefreshKey])
 
-  const filtered = useMemo(() => (data ? filterTable(data, query) : null), [data, query])
+  const filtered = useMemo(
+    () => (data ? filterTable(data, query) : null),
+    [data, query],
+  )
 
-  const printFiche = (): void => {
-    const id = filtered?.ids[0]
-    if (id === undefined) return
-    window.open(exportUrl(`/api/export/clients/${id}/fiche`), "_blank", "noopener")
-  }
+  const managedModule: ManagedModule | null =
+    module === "Clients" || module === "Commerciaux" ? module : null
 
   if (error) {
     return (
@@ -56,7 +89,9 @@ export default function GenericTablePage({
   if (!filtered) {
     return (
       <section className="data-card">
-        <p className="p-4 text-sm text-neutral-500">Chargement des {module.toLowerCase()}…</p>
+        <p className="p-4 text-sm text-neutral-500">
+          Chargement des {module.toLowerCase()}…
+        </p>
       </section>
     )
   }
@@ -69,11 +104,6 @@ export default function GenericTablePage({
           <p>{filtered.rows.length} éléments affichés</p>
         </div>
         <div>
-          {module === "Clients" && (
-            <button className="secondary" onClick={printFiche} disabled={filtered.ids.length === 0}>
-              <Icon name="print" size={17} /> Imprimer une fiche
-            </button>
-          )}
           <button className="primary small" onClick={onAdd}>
             <Icon name="plus" size={17} /> Ajouter
           </button>
@@ -104,17 +134,74 @@ export default function GenericTablePage({
                   </td>
                 ))}
                 <td className="actions">
-                  <button title="Historique">
-                    <Icon name="history" size={17} />
-                  </button>
-                  <button>Modifier</button>
-                  <button>•••</button>
+                  {managedModule ? (
+                    <>
+                      <button
+                        type="button"
+                        title={
+                          managedModule === "Clients"
+                            ? "Historique client"
+                            : "Fiche de performance"
+                        }
+                        aria-label={
+                          managedModule === "Clients"
+                            ? "Historique client"
+                            : "Fiche de performance"
+                        }
+                        onClick={() =>
+                          setSelectedRecord({
+                            id: filtered.ids[i]!,
+                            mode: "details",
+                          })
+                        }
+                      >
+                        <Icon
+                          name={
+                            managedModule === "Clients" ? "history" : "stats"
+                          }
+                          size={17}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedRecord({
+                            id: filtered.ids[i]!,
+                            mode: "edit",
+                          })
+                        }
+                      >
+                        Modifier
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button title="Historique">
+                        <Icon name="history" size={17} />
+                      </button>
+                      <button>Modifier</button>
+                      <button>•••</button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {selectedRecord && managedModule && (
+        <ClientCommercialModal
+          module={managedModule}
+          id={selectedRecord.id}
+          mode={selectedRecord.mode}
+          close={() => setSelectedRecord(null)}
+          onSaved={() => {
+            setSelectedRecord(null)
+
+            setLocalRefreshKey((current) => current + 1)
+          }}
+        />
+      )}
     </section>
   )
 }

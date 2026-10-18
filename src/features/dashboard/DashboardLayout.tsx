@@ -1,71 +1,106 @@
 import { useMemo, useState } from "react"
+
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom"
+
 import Icon from "@/shared/components/Icon"
+
 import Logo from "@/shared/components/Logo"
+
 import { MODULE_ICONS } from "@/shared/data/mockData"
+
 import { ROUTES } from "@/app/routes"
+
 import { useAuth } from "@/features/auth/AuthContext"
+
 import AddModal from "./components/AddModal"
+
 import type { DashboardModule } from "@/shared/data/types"
 
 export interface DashboardOutletContext {
   query: string
+
   refreshKey: number
+
   onAdd: () => void
-  onClientCreated: () => void
+
+  onRecordCreated: () => void
+
   onSeeLocations: () => void
 }
 
 const NAV: Array<{
   label: DashboardModule
+
   to: string
+
   badge?: string
 }> = [
   { label: "Vue d’ensemble", to: ROUTES.overview },
+
   { label: "Commerciaux", to: ROUTES.commerciaux },
+
   { label: "Véhicules", to: ROUTES.vehicules },
+
   { label: "Locations", to: ROUTES.locations },
+
   { label: "Réservations", to: ROUTES.reservations, badge: "7" },
+
   { label: "Clients", to: ROUTES.clients },
+
   { label: "Statistiques", to: ROUTES.statistiques },
 ]
 
 function moduleFromPath(pathname: string): DashboardModule {
   const found = NAV.find((n) => n.to === pathname)
+
   return found ? found.label : "Vue d’ensemble"
 }
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth()
+
   const navigate = useNavigate()
+
   const location = useLocation()
+
   const [query, setQuery] = useState("")
+
   const [modal, setModal] = useState(false)
+
   const [refreshKey, setRefreshKey] = useState(0)
 
   const module = moduleFromPath(location.pathname)
+
   const subtitle = useMemo(
     () =>
       module === "Vue d’ensemble"
         ? "Voici la situation de l’activité aujourd’hui."
         : `Consultez et gérez les données du module ${module.toLowerCase()}.`,
+
     [module],
   )
 
   const showNewButton = !["Vue d’ensemble", "Statistiques"].includes(module)
+
   const outletContext: DashboardOutletContext = useMemo(
     () => ({
       query,
+
       refreshKey,
+
       onAdd: () => setModal(true),
-      onClientCreated: () => setRefreshKey((current) => current + 1),
+
+      onRecordCreated: () => setRefreshKey((current) => current + 1),
+
       onSeeLocations: () => navigate(ROUTES.locations),
     }),
+
     [query, refreshKey, navigate],
   )
 
   const handleLogout = () => {
     logout()
+
     navigate(ROUTES.home)
   }
 
@@ -82,12 +117,14 @@ export default function DashboardLayout() {
               item.to === ROUTES.overview
                 ? location.pathname === ROUTES.overview
                 : location.pathname === item.to
+
             return (
               <button
                 key={item.label}
                 className={isActive ? "active" : ""}
                 onClick={() => {
                   setQuery("")
+
                   navigate(item.to)
                 }}
               >
@@ -154,7 +191,7 @@ export default function DashboardLayout() {
         <AddModal
           module={module}
           close={() => setModal(false)}
-          onCreated={outletContext.onClientCreated}
+          onCreated={outletContext.onRecordCreated}
         />
       )}
     </main>

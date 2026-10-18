@@ -1,5 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,700;1,900&display=swap");
 @import "tailwindcss";
+@source "./features/dashboard/components/AddModal.tsx";
+@source "./features/dashboard/components/ClientCommercialModal.tsx";
 
 :root { font-family: "Roboto", sans-serif; color: #161616; background: #fff; font-synthesis: none; --yellow: #ffd100; --black: #0b0b0b; --surface: #f4f4f1; --line: #deded9; }
 * { box-sizing: border-box; } body { margin: 0; min-width: 320px; } button, input, select { font: inherit; } button { cursor: pointer; } .full { width: 100%; }

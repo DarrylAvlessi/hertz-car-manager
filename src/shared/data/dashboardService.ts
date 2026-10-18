@@ -1,6 +1,9 @@
 // Couche d'accès aux données — branchée sur hertz-server (plus de mocks).
+
 // Les lignes restent au format string[][] pour ne pas toucher aux tableaux.
+
 import { apiFetch } from "@/shared/api/client"
+
 import type { TableData, TableModule } from "./types"
 
 export interface TableResult extends TableData {
@@ -9,69 +12,136 @@ export interface TableResult extends TableData {
 
 export interface OverviewStats {
   caTotal: number
+
   devise: string
+
   caCroissance: string
+
   vehiculesDisponibles: number
+
   vehiculesTotal: number
+
   locationsActives: number
+
   reservationsEnAttente: number
+
   tauxUtilisation: number
+
   tauxRotation: number
+
   reservationsAbouties: number
+
   reservationsTotal: number
 }
 
 export interface MonthlyPoint {
   mois: string
+
   courte: number
+
   longue: number
 }
 
 interface VehiculeDto {
   id: number
+
   immatriculation: string
+
   marqueModele: string
+
   categorie: string
+
   kilometrage: number
+
   statut: string
 }
 
-interface CommercialFicheDto {
+export interface CommercialFicheDto {
   id: number
+
   nom: string
+
   contact: string
+
+  nomFamille?: string
+
+  prenom?: string | null
+
+  abreviation?: string | null
+
+  telephone?: string | null
+
+  email?: string | null
+
   locationsConclues: number
+
   chiffreAffaires: number
+
   performance: string
 }
 
-interface LocationFicheDto {
+export interface LocationFicheDto {
   id: number
+
   reference: string
+
   client: string
+
   vehicule: string
+
   type: string
+
+  dateDebut?: string
+
   dateFin: string
+
+  montant?: number
+
   statut: string
 }
 
 interface ReservationFicheDto {
   id: number
+
   reference: string
+
   client: string
+
   dateDepart: string
+
   dureeJours: number
+
   commercial: string | null
+
   statut: string
 }
 
-interface ClientFicheDto {
+export interface ClientFicheDto {
   id: number
+
   nom: string
+
+  nomFamille?: string
+
+  prenom?: string | null
+
   type: string
+
   telephone: string
+
+  email?: string | null
+
+  adresse?: string | null
+
+  numPermis?: string | null
+
   locationsCount: number
+
   derniereOperation: string | null
+}
+
+export interface ClientDetailDto extends ClientFicheDto {
+  locations: LocationFicheDto[]
 }
 
 function normSpace(s: string): string {
@@ -94,6 +164,7 @@ export function formatCompactMillions(n: number): string {
 
 export function formatDateFr(iso: string): string {
   const [y, m, d] = iso.split("-")
+
   return `${d}/${m}/${y}`
 }
 
@@ -109,73 +180,139 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
   switch (module) {
     case "Véhicules": {
       const rows = await apiFetch<VehiculeDto[]>("/api/vehicules")
+
       return {
-        headers: ["Immatriculation", "Véhicule", "Catégorie", "Kilométrage", "Situation"],
+        headers: [
+          "Immatriculation",
+          "Véhicule",
+          "Catégorie",
+          "Kilométrage",
+          "Situation",
+        ],
+
         rows: rows.map((v) => [
           v.immatriculation,
+
           v.marqueModele,
+
           v.categorie,
+
           formatKm(v.kilometrage),
+
           v.statut,
         ]),
+
         ids: rows.map((v) => v.id),
       }
     }
+
     case "Commerciaux": {
       const rows = await apiFetch<CommercialFicheDto[]>("/api/commerciaux")
+
       return {
-        headers: ["Commercial", "Contact", "Locations conclues", "Chiffre d’affaires", "Performance"],
+        headers: [
+          "Commercial",
+          "Contact",
+          "Locations conclues",
+          "Chiffre d’affaires",
+          "Performance",
+        ],
+
         rows: rows.map((c) => [
           c.nom,
+
           c.contact,
+
           String(c.locationsConclues),
+
           formatMontant(c.chiffreAffaires),
+
           c.performance,
         ]),
+
         ids: rows.map((c) => c.id),
       }
     }
+
     case "Locations": {
       const rows = await apiFetch<LocationFicheDto[]>("/api/locations")
+
       return {
         headers: ["Contrat", "Client", "Véhicule", "Type", "Échéance", "État"],
+
         rows: rows.map((l) => [
           l.reference,
+
           l.client,
+
           l.vehicule,
+
           l.type,
+
           formatDateFr(l.dateFin),
+
           l.statut,
         ]),
+
         ids: rows.map((l) => l.id),
       }
     }
+
     case "Réservations": {
       const rows = await apiFetch<ReservationFicheDto[]>("/api/reservations")
+
       return {
-        headers: ["Réservation", "Client", "Départ", "Durée", "Commercial", "Statut"],
+        headers: [
+          "Réservation",
+          "Client",
+          "Départ",
+          "Durée",
+          "Commercial",
+          "Statut",
+        ],
+
         rows: rows.map((r) => [
           r.reference,
+
           r.client,
+
           formatDateFr(r.dateDepart),
+
           formatDuree(r.dureeJours),
+
           r.commercial ?? "—",
+
           r.statut,
         ]),
+
         ids: rows.map((r) => r.id),
       }
     }
+
     case "Clients": {
       const rows = await apiFetch<ClientFicheDto[]>("/api/clients")
+
       return {
-        headers: ["Client", "Type", "Téléphone", "Locations", "Dernière opération"],
+        headers: [
+          "Client",
+          "Type",
+          "Téléphone",
+          "Locations",
+          "Dernière opération",
+        ],
+
         rows: rows.map((c) => [
           c.nom,
+
           c.type,
+
           c.telephone,
+
           String(c.locationsCount),
+
           c.derniereOperation ?? "—",
         ]),
+
         ids: rows.map((c) => c.id),
       }
     }
@@ -184,14 +321,20 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
 
 export function filterTable(data: TableResult, query: string): TableResult {
   const q = query.trim().toLowerCase()
+
   if (!q) return data
+
   const keep: number[] = []
+
   data.rows.forEach((row, i) => {
     if (row.join(" ").toLowerCase().includes(q)) keep.push(i)
   })
+
   return {
     headers: data.headers,
+
     rows: keep.map((i) => data.rows[i]!),
+
     ids: keep.map((i) => data.ids[i]!),
   }
 }
@@ -201,10 +344,21 @@ export async function fetchOverviewStats(): Promise<OverviewStats> {
 }
 
 export async function fetchRecentLocations(limit = 3): Promise<TableResult> {
-  const rows = await apiFetch<LocationFicheDto[]>(`/api/locations?limit=${limit}`)
+  const rows = await apiFetch<LocationFicheDto[]>(
+    `/api/locations?limit=${limit}`,
+  )
+
   return {
     headers: ["Opération", "Client", "Véhicule", "Échéance", "État"],
-    rows: rows.map((l) => [l.reference, l.client, l.vehicule, formatDateFr(l.dateFin), l.statut]),
+
+    rows: rows.map((l) => [
+      l.reference,
+      l.client,
+      l.vehicule,
+      formatDateFr(l.dateFin),
+      l.statut,
+    ]),
+
     ids: rows.map((l) => l.id),
   }
 }
@@ -213,7 +367,24 @@ export async function fetchMonthly(): Promise<MonthlyPoint[]> {
   return apiFetch<MonthlyPoint[]>("/api/stats/monthly")
 }
 
+export async function fetchClientFiche(id: number): Promise<ClientDetailDto> {
+  return apiFetch<ClientDetailDto>(`/api/clients/${id}/fiche`)
+}
+
+export async function fetchCommercialFiche(
+  id: number,
+): Promise<CommercialFicheDto> {
+  const rows = await apiFetch<CommercialFicheDto[]>("/api/commerciaux")
+
+  const fiche = rows.find((commercial) => commercial.id === id)
+
+  if (!fiche) throw new Error("Commercial introuvable")
+
+  return fiche
+}
+
 // Ligne « activité récente » (réutilisée par la page Vue d'ensemble).
+
 export function locationFicheToRecentRow(l: LocationFicheDto): string[] {
   return [l.reference, l.client, l.vehicule, formatDateFr(l.dateFin), l.statut]
 }
