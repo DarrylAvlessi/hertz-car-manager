@@ -7,7 +7,7 @@ Express + TypeScript strict, stockage interchangeable **memory | MySQL** via `DB
 ```bash
 cp .env.example .env   # renseigner JWT_SECRET (déjà fait en local)
 npm install
-npm run dev            # http://localhost:3001, driver=memory seedé
+npm run dev            # http://localhost:3101, driver=memory seedé
 ```
 
 ## Brancher MySQL (plus tard)
@@ -36,6 +36,10 @@ npm run dev
 | GET     | `/health`                              | —    | statut + driver actif                    |
 | POST    | `/auth/login` `{email,password}`       | —    | → `{token, user}`                        |
 | GET     | `/auth/me`                             | auth | profil du token                          |
+| GET/POST | `/parc/categories`                    | resp | liste et création des catégories véhicule |
+| PUT/DELETE | `/parc/categories/:id`              | resp | modification et suppression d’une catégorie |
+| GET/POST | `/parc/modeles`                       | resp | liste et création des modèles véhicule |
+| PUT/DELETE | `/parc/modeles/:id`                 | resp | modification et suppression d’un modèle |
 | GET     | `/vehicules?q&limit`                   | resp | liste véhicules                          |
 | GET     | `/vehicules/:id`                       | resp | détail                                   |
 | GET     | `/vehicules/:id/disponibilite?from&to` | resp | règle garage/location/résa (tunnel Prince) |

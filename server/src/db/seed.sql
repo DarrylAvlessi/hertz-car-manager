@@ -1,70 +1,364 @@
--- Hertz Bénin — jeu de démo (reprend les données du prototype frontend).
--- Mot de passe admin : hertz2025 (hash bcrypt ci-dessous).
--- Exécution : npm run db:migrate (server/) quand MySQL est disponible.
+-- Données de référence et parc initial Hertz Bénin.
+-- Exécution : npm run db:migrate (server/) avec DB_DRIVER=mysql.
+SET NAMES utf8mb4;
 
+-- Compte de démonstration : responsable@hertz.bj / hertz2025.
+INSERT IGNORE INTO administrateur (nom, prenom, email, login, mot_de_passe_hash)
+VALUES (
+  'Orou',
+  'Koffi',
+  'responsable@hertz.bj',
+  'responsable',
+  '$2b$10$Wr4gXal.lc8kBaoa1xbFRu1JZJAyqaUChYdSzde.1/SdIhH/En0N2'
+);
+
+-- Calendrier 2020-2040 (extensible avec sp_peupler_calendrier)
+
+
+-- Agences (fichier « Liste des agents de vente »)
+INSERT IGNORE INTO agence (code, nom) VALUES
+ ('APS', 'Agence principale'),
+ ('AEP', 'Agence Aéroport'),
+ ('AGT', 'Agence Golden Tulip');
+
+-- Lieux rencontrés dans le journal des mouvements
+INSERT IGNORE INTO lieu (libelle, type_lieu, ville, id_agence) VALUES
+ ('Direction Hertz',  'AGENCE',   'Cotonou', (SELECT id_agence FROM agence WHERE code = 'APS')),
+ ('Agence Aéroport',  'AEROPORT', 'Cotonou', (SELECT id_agence FROM agence WHERE code = 'AEP')),
+ ('Golden Tulip',     'HOTEL',    'Cotonou', (SELECT id_agence FROM agence WHERE code = 'AGT')),
+ ('Sofitel',          'HOTEL',    'Cotonou', NULL);
+
+-- Catégories : à compléter avec VOS tarifs (0 = non renseigné)
+INSERT IGNORE INTO categorie_vehicule (libelle, tarif_journalier) VALUES
+ ('Citadine / Berline',        0),
+ ('SUV / 4x4',                 0),
+ ('Pick-up',                   0),
+ ('Utilitaire / Minibus',      0),
+ ('Non classé',                0);
+
+-- Modèles normalisés (variantes orthographiques du fichier parc regroupées).
+-- La catégorie est une proposition de classement : à valider.
+SET @c_ville = (SELECT id_categorie FROM categorie_vehicule WHERE libelle = 'Citadine / Berline');
+SET @c_suv   = (SELECT id_categorie FROM categorie_vehicule WHERE libelle = 'SUV / 4x4');
+SET @c_pick  = (SELECT id_categorie FROM categorie_vehicule WHERE libelle = 'Pick-up');
+SET @c_bus   = (SELECT id_categorie FROM categorie_vehicule WHERE libelle = 'Utilitaire / Minibus');
+SET @c_nc    = (SELECT id_categorie FROM categorie_vehicule WHERE libelle = 'Non classé');
+INSERT IGNORE INTO modele_vehicule (marque, nom, id_categorie) VALUES
+ ('NISSAN','NP300',@c_pick), ('NISSAN','HARDBODY',@c_pick), ('NISSAN','KICKS',@c_suv), ('NISSAN','QASHQAI',@c_suv),
+ ('TOYOTA','HILUX',@c_pick), ('TOYOTA','PRADO',@c_suv), ('TOYOTA','RAV4',@c_suv), ('TOYOTA','FORTUNER',@c_suv),
+ ('TOYOTA','COROLLA',@c_ville), ('TOYOTA','COROLLA CROSS',@c_suv), ('TOYOTA','STARLET',@c_ville), ('TOYOTA','HIACE',@c_bus),
+ ('MITSUBISHI','L200',@c_pick), ('MITSUBISHI','PAJERO SPORT',@c_suv),
+ ('ISUZU','D-MAX',@c_pick),
+ ('SUZUKI','SWIFT',@c_ville), ('SUZUKI','VITARA',@c_suv),
+ ('JEEP','GRAND CHEROKEE',@c_suv),
+ ('MERCEDES','E350',@c_ville),
+ ('PEUGEOT','408 GT',@c_ville),
+ ('GEELY','STARRAY',@c_suv),
+ ('FOTON','SUPPORTER',@c_bus), ('FOTON','VIEW CS2',@c_bus), ('FOTON','BJ6730',@c_bus), ('FOTON','MINI-BUS',@c_bus),
+ -- modèle provisoire pour les véhicules dont la marque/le modèle n'est pas connu (à corriger ensuite)
+ ('INCONNU','À PRÉCISER',@c_nc);
+
+-- Types de contraventions et montants observés dans le fichier ANATT
+INSERT IGNORE INTO type_contravention (libelle, montant_standard) VALUES
+ ('Excès de vitesse en agglomération',                    10000),
+ ('Refus d''obtempérer',                                  12000),
+ ('Non-respect des feux tricolores',                       5000),
+ ('Communication téléphonique au guidon ou au volant',    20000),
+ ('Défaut d''assurance',                                  15000),
+ ('Non-respect du sens giratoire',                         6000),
+ ('Non-respect des couloirs de circulation',               5000),
+ ('Chevauchement',                                         6000);
+
+-- Motifs de non-aboutissement (suggestions à adapter à votre activité)
+INSERT IGNORE INTO motif_non_aboutissement (code, libelle) VALUES
+ ('ANNULATION_CLIENT',      'Annulation par le client'),
+ ('VEHICULE_INDISPONIBLE',  'Véhicule demandé indisponible'),
+ ('PRIX',                   'Tarif jugé trop élevé'),
+ ('NON_CONFIRME',           'Réservation non confirmée / pas de réponse du client'),
+ ('BON_COMMANDE_ABSENT',    'Bon de commande jamais reçu'),
+ ('CHOIX_CONCURRENT',       'Client parti chez un concurrent'),
+ ('CHANGEMENT_BESOIN',      'Besoin du client modifié ou supprimé'),
+ ('AUTRE',                  'Autre motif');
+
+-- =====================================================================================
+--  DONNÉES INITIALES : agents de vente, centres, parc de véhicules
+--  Générées à partir de : Liste_des_agents_de_vente_.xlsx et PARC_LCD.xlsx
+--  À exécuter APRÈS base_donnees_gestion_location.sql
+-- =====================================================================================
 USE hertz_benin;
+SET NAMES utf8mb4;
 
-INSERT INTO administrateur (nom, email, password_hash, role) VALUES
-  ('Koffi Orou', 'responsable@hertz.bj',
-   '$2b$10$vgC9DvR.CdUBlSycCk0EQemwVVdGOXe.jM1ic9TyN2gTk3CxyrUoi', 'responsable')
-ON DUPLICATE KEY UPDATE nom = VALUES(nom);
 
-INSERT INTO commercial (id, nom, contact) VALUES
-  (1, 'Aïcha Sossa', 'a.sossa@hertz.bj'),
-  (2, 'Koffi Orou', 'k.orou@hertz.bj'),
-  (3, 'Mariam Bio', 'm.bio@hertz.bj'),
-  (4, 'David Hounkpatin', 'd.hounkpatin@hertz.bj')
-ON DUPLICATE KEY UPDATE nom = VALUES(nom), contact = VALUES(contact);
+-- ---- Commerciaux (liste des agents de vente) ----
+INSERT IGNORE INTO commercial (prenom, nom, abreviation, id_agence, id_administrateur) VALUES
+  ('Ulrich', 'ADOKO', 'UA', (SELECT id_agence FROM agence WHERE code = 'APS'), 1),
+  ('Déborah', 'PADONOU', 'DP', (SELECT id_agence FROM agence WHERE code = 'APS'), 1),
+  ('Marie-Rosaline', 'ADJANOHOUN', 'MRA', (SELECT id_agence FROM agence WHERE code = 'APS'), 1),
+  ('Nadine', 'AHOUANDJINOU', NULL, (SELECT id_agence FROM agence WHERE code = 'APS'), 1),
+  ('Maryam', 'KAFFO', 'MK', (SELECT id_agence FROM agence WHERE code = 'APS'), 1),
+  ('Ramanath', 'LANIGNAN', 'RL', (SELECT id_agence FROM agence WHERE code = 'AEP'), 1),
+  ('Micheline', 'WADA', 'MW', (SELECT id_agence FROM agence WHERE code = 'AGT'), 1);
+-- Commercial « technique » pour les anciennes lignes sans agent (20 lignes du suivi Excel n'en ont pas)
+INSERT IGNORE INTO commercial (prenom, nom, abreviation, actif, id_administrateur) VALUES (NULL, 'NON RENSEIGNÉ', 'NR', FALSE, 1);
 
-INSERT INTO client (id, nom, type, telephone) VALUES
-  (1, 'Groupe Tèkponon', 'Entreprise', '+229 01 97 12 43 08'),
-  (2, 'Sandra Adé', 'Particulier', '+229 01 96 88 10 25'),
-  (3, 'Cabinet A2C', 'Entreprise', '+229 01 95 32 90 11'),
-  (4, 'Jean Loko', 'Particulier', '+229 01 97 41 22 16'),
-  (5, 'Alex Morgan', 'Particulier', '+229 01 90 11 22 33'),
-  (6, 'Sophie Adjovi', 'Particulier', '+229 01 91 44 55 66'),
-  (7, 'Marc Houénou', 'Particulier', '+229 01 92 77 88 99'),
-  (8, 'Sarah Johnson', 'Particulier', '+229 01 93 00 11 22')
-ON DUPLICATE KEY UPDATE nom = VALUES(nom), type = VALUES(type), telephone = VALUES(telephone);
+-- ---- Clients rattachés au parc (centres de type CLIENT) ----
+INSERT IGNORE INTO client (type_client, nom, id_administrateur) VALUES
+  ('ENTREPRISE','MOOV BENIN',1),
+  ('ENTREPRISE','ADMEC',1),
+  ('ENTREPRISE','SOGEA SATOM',1);
+-- ---- Centres de rattachement ----
+INSERT IGNORE INTO centre (nom, type_centre, id_client) VALUES
+  ('ARCS BENIN', 'SOCIETE', NULL),
+  ('MOOV BENIN', 'CLIENT', (SELECT id_client FROM client WHERE nom = 'MOOV BENIN')),
+  ('ADMEC', 'CLIENT', (SELECT id_client FROM client WHERE nom = 'ADMEC')),
+  ('SOGEA SATOM', 'CLIENT', (SELECT id_client FROM client WHERE nom = 'SOGEA SATOM')),
+  ('KOVOEGNAN', 'PERSONNE', NULL),
+  ('ADJANOHOUN Marie-Rosaline', 'PERSONNE', NULL),
+  ('AMICHIA Sandra', 'PERSONNE', NULL);
+-- ---- Garages cités dans les observations du parc ----
+INSERT IGNORE INTO garage (nom) VALUES ('Japan Motors'), ('Garage Rousseau');
+-- ---- Véhicules (169) ----
+INSERT IGNORE INTO vehicule (immatriculation, marque, modele, version, numero_chassis, carburant, kilometrage, segment_parc, groupe_geolocalisation, id_centre, date_mise_en_service, date_entree_parc, statut, date_prochaine_visite_technique, date_expiration_assurance, observation, id_categorie, id_administrateur) VALUES
+  ('CG 1754 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH0A2215','DIESEL',19027,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1738 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH0A2138','DIESEL',19000,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1836 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH098433','DIESEL',26823,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1801 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH0A2130','DIESEL',36956,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1759 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH0A2208',NULL,18107,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1849 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH0A2055',NULL,26173,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1833 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH099050','DIESEL',32990,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1733 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH0A2146','DIESEL',19608,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1786 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH098186','DIESEL',22820,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1840 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH099023','DIESEL',19677,'AUTRE','ADMEC',(SELECT id_centre FROM centre WHERE nom = 'ADMEC'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('BS 1127 RB','TOYOTA','HILUX',NULL,'AHTKK8CD300677918','DIESEL',51236,'AUTRE','ARCS BENIN',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('BY 8771 RB','MERCEDES','E350',NULL,'WDDHF8JB4CA573438','ESSENCE',471164,'LCD','KOVOEGNAN',(SELECT id_centre FROM centre WHERE nom = 'KOVOEGNAN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,'Utilisé par KOVOEGNAN',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MERCEDES' AND nom = 'E350'),1),
+  ('CE 4231 RB','NISSAN','KICKS',NULL,'3N1CP5CP2RL463324','ESSENCE',43849,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENVOI_GARAGE','2026-12-26','2026-12-31','accidenté 24/07/2026',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CC 6287 RB','TOYOTA','FORTUNER',NULL,'AHTKB3FS900260199','DIESEL',138127,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-04-13','2023-04-13','ENTREE_PARC','2027-05-15','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'FORTUNER'),1),
+  ('BY 4289 RB','SUZUKI','SWIFT',NULL,'MBHCZC63S00790202','ESSENCE',129959,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2021-09-02','2021-09-02','ENTREE_PARC','2026-10-02','2026-12-31','Utilisé par le Colonel TOSSA',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'SUZUKI' AND nom = 'SWIFT'),1),
+  ('CC 7766 RB','TOYOTA','HILUX','4x4','AHTKB8CD002986203',NULL,114818,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-04-29','2023-04-29','ENTREE_PARC','2027-06-06','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('CD 0713 RB','SUZUKI','VITARA',NULL,'TSMLYD21S00C01874','ESSENCE',44628,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-06-06','2023-06-06','ENTREE_PARC','2027-06-26','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'SUZUKI' AND nom = 'VITARA'),1),
+  ('BV 5891 RB','SUZUKI','SWIFT',NULL,'MBHCZC63S00594412','ESSENCE',72257,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2021-01-07','2021-01-07','ENVOI_GARAGE',NULL,'2026-12-31','Garage Rousseau /immobilisée depuis plus de 6 mois',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'SUZUKI' AND nom = 'SWIFT'),1),
+  ('CE 4223 RB','NISSAN','KICKS',NULL,'3N1CP5CP6RL463696','ESSENCE',50789,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-01-23','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CD 0695 RB','SUZUKI','VITARA',NULL,'TSMLYD21S00C03374','ESSENCE',62051,'IMPRO','IMPRO',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-06-06','2023-06-06','ENTREE_PARC','2027-06-25','2026-12-31','Utilisé par le DAF',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'SUZUKI' AND nom = 'VITARA'),1),
+  ('CE 4221 RB','NISSAN','KICKS',NULL,'3N1CP5CP4RL463731','ESSENCE',24012,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-01-22','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CD 1334 RB','SUZUKI','VITARA',NULL,'TSMLYD21S00C01512',NULL,69167,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-06-13','2023-06-13','ENTREE_PARC','2027-06-25','2026-12-31','Utilisé par M. Florent VIAOUDE',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'SUZUKI' AND nom = 'VITARA'),1),
+  ('TG 3248 BE','ISUZU','D-MAX',NULL,'ACVDSCJL8K4049122','DIESEL',164485,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'ISUZU' AND nom = 'D-MAX'),1),
+  ('TG 3252 BE','ISUZU','D-MAX',NULL,'ACVDSCJL0K4049258','DIESEL',31178,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'ISUZU' AND nom = 'D-MAX'),1),
+  ('CC 9893 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00234559','ESSENCE',48495,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-05-26','2023-05-26','ENTREE_PARC','2027-06-05','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CE 4225 RB','NISSAN','KICKS',NULL,'3N1CP5CP9RL460985','ESSENCE',49358,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-01-22','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('TG 3250 BE','ISUZU','D-MAX',NULL,NULL,'DIESEL',150628,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'ISUZU' AND nom = 'D-MAX'),1),
+  ('CD 3650 RB','TOYOTA','COROLLA',NULL,'AHTKFCAG800612079','ESSENCE',80878,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-07-13','2023-07-13','ENTREE_PARC','2027-07-21','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'COROLLA'),1),
+  ('CJ 1583 RB','ISUZU','D-MAX',NULL,'ACVDSCJL9K4065765','DIESEL',117962,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2021-01-01','2021-01-01','ENVOI_GARAGE','2026-07-10','2026-12-31','accidenté 29/06/2026',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'ISUZU' AND nom = 'D-MAX'),1),
+  ('CC 9891 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00231761','ESSENCE',56640,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-05-26','2023-05-26','ENTREE_PARC','2027-06-05','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CE 4216 RB','NISSAN','KICKS',NULL,'3N1CP5P4RL463650','ESSENCE',58595,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-01-22','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('BZ 5993 RB','NISSAN','KICKS',NULL,'31CP5C99LL500586','ESSENCE',64977,'IMPRO','IMPRO',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2022-02-18','2022-02-18','ENTREE_PARC','2027-04-10','2026-12-31','IMPRO',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CG 1136 RB','TOYOTA','PRADO',NULL,'JTEBR9FJ40K332140','DIESEL',38708,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2024-09-09','2024-09-09','ENTREE_PARC','2026-10-08','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'PRADO'),1),
+  ('CF 1086 RB','NISSAN','QASHQAI',NULL,'SJNTANJ12Z1385899','ESSENCE',16246,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENVOI_GARAGE',NULL,'2026-12-31','epave',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'QASHQAI'),1),
+  ('CF 1082 RB','NISSAN','QASHQAI',NULL,'SJNTANJ12Z1407262','ESSENCE',48274,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2024-04-02','2024-04-02','ENTREE_PARC','2027-05-18','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'QASHQAI'),1),
+  ('CE 4218 RB','NISSAN','KICKS',NULL,'3N1CP5CP1RL463315','ESSENCE',53635,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-01-22','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CE 4226 RB','NISSAN','KICKS',NULL,'3N1CP5CP6RL461267','ESSENCE',56917,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-06-23','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CD 3678 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00324514',NULL,58194,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-07-14','2023-07-14','ENTREE_PARC','2026-07-23','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CE 4217 RB','NISSAN','KICKS',NULL,'3N1CP5CP2RL461265','ESSENCE',66120,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-12-13','2023-12-13','ENTREE_PARC','2027-01-19','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('BZ 5861 RB','NISSAN','KICKS',NULL,'3NICP5C98LL512986','ESSENCE',74113,'IMPRO','IMPRO',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2022-02-18','2022-02-18','ENTREE_PARC','2027-04-25','2026-12-31','IMPRO',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CG 2952 RB','MITSUBISHI','L200',NULL,'MMBJJKL10PH062763','DIESEL',68145,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2024-10-08','2024-10-08','ENTREE_PARC','2026-10-23','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 6140 RB','MITSUBISHI','PAJERO SPORT',NULL,'MMBGYKS30NHU14772','DIESEL',92186,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2023-04-12','2023-04-12','ENVOI_GARAGE','2026-06-13','2026-12-31','Garage Rousseau',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'PAJERO SPORT'),1),
+  ('CC 6142 RB','SUZUKI','VITARA',NULL,'TSMLYD21S00B13324','ESSENCE',63023,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'SUZUKI' AND nom = 'VITARA'),1),
+  ('CJ 2382 RB','FOTON','MINI-BUS',NULL,'LVCB2NAA2SS011417','DIESEL',18251,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-08-06','2025-08-06','ENVOI_GARAGE','2026-08-18','2026-12-31','garage japanmotors',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'FOTON' AND nom = 'MINI-BUS'),1),
+  ('CK 9650 RB','NISSAN','KICKS',NULL,NULL,'ESSENCE',6633,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-04-01','2026-04-01','ENTREE_PARC','2027-04-10','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CK 9655 RB','NISSAN','KICKS',NULL,NULL,'ESSENCE',4994,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-04-01','2026-04-01','ENTREE_PARC','2027-04-10','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CJ 2381 RB','FOTON','SUPPORTER','VIEW CS2','LVCB2NAAXSS011407','DIESEL',17869,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-08-06','2025-08-06','ENTREE_PARC','2026-08-25','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'FOTON' AND nom = 'SUPPORTER'),1),
+  ('CJ 4697 RB','FOTON','SUPPORTER',NULL,'LVCB2NAA2SS012213','DIESEL',4952,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-10-15','2025-10-15','ENVOI_GARAGE','2026-10-23','2026-12-31','garage japanmotors',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'FOTON' AND nom = 'SUPPORTER'),1),
+  ('CK 4374 RB','JEEP','GRAND CHEROKEE',NULL,NULL,'ESSENCE',13132,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-01-22','2026-01-22','ENTREE_PARC','2027-02-06','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'JEEP' AND nom = 'GRAND CHEROKEE'),1),
+  ('CK 3841 RB','JEEP','GRAND CHEROKEE',NULL,'1C4RJHBG4S8727028','ESSENCE',5434,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-01-16','2026-01-16','ENTREE_PARC','2027-01-26','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'JEEP' AND nom = 'GRAND CHEROKEE'),1),
+  ('CJ 7593 RB','PEUGEOT','408 GT',NULL,'VR3F3GP9SY513252','ESSENCE',10949,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-10-20','2025-10-20','ENTREE_PARC','2026-10-24','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'PEUGEOT' AND nom = '408 GT'),1),
+  ('CK 2259 RB','JEEP','GRAND CHEROKEE',NULL,'1C4RJHBG2S8727027','ESSENCE',12812,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-12-23','2025-12-23','ENTREE_PARC','2027-01-05','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'JEEP' AND nom = 'GRAND CHEROKEE'),1),
+  ('CE 7816 RB','TOYOTA','HILUX','SR5','MROBB8CD804116511','DIESEL',76979,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2024-02-07','2024-02-07','ENTREE_PARC','2027-02-27','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('CJ 4694 RB','FOTON','SUPPORTER',NULL,'LVCB2NAA4SS012214','DIESEL',11395,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-10-15','2025-10-15','ENTREE_PARC','2026-10-23','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'FOTON' AND nom = 'SUPPORTER'),1),
+  ('CJ 2385 RB','FOTON','VIEW CS2',NULL,'LVCB2NAA0SS011416',NULL,11555,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-08-06','2025-08-06','ENTREE_PARC','2026-08-25','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'FOTON' AND nom = 'VIEW CS2'),1),
+  ('CJ 7590 RB','GEELY','STARRAY',NULL,'LB3FX1S76SB054907','ESSENCE',31383,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-10-20','2025-10-20','ENTREE_PARC','2026-11-03','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'GEELY' AND nom = 'STARRAY'),1),
+  ('CK 2606 RB','TOYOTA','PRADO',NULL,'JTEAR9AJ60K026480','DIESEL',16851,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-12-27','2025-12-27','ENTREE_PARC','2027-01-05','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'PRADO'),1),
+  ('CK 2607 RB','TOYOTA','PRADO',NULL,'JTEAR9AJ60K026513','DIESEL',13565,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2025-12-27','2025-12-27','ENTREE_PARC','2027-01-19','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'PRADO'),1),
+  ('CK 3840 RB','NISSAN','KICKS',NULL,'3N1CP5CP2R535719','ESSENCE',8541,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-01-16','2026-01-16','ENTREE_PARC','2027-02-27','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CK 3863 RB','NISSAN','KICKS',NULL,'3N1CP5CP2R535650','ESSENCE',9286,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-01-16','2026-01-16','ENTREE_PARC','2027-01-27','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CK 3851 RB','NISSAN','KICKS',NULL,'3N1CP5CP2R535301','ESSENCE',11994,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-01-16','2026-01-16','ENTREE_PARC','2027-01-27','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('BU 9597 RB','TOYOTA','HILUX',NULL,'AHT+A1:H165KK8CDX00680685','DIESEL',197380,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('BV 4055 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077770','DIESEL',164535,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 2581 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0079135','DIESEL',181391,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 9442RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077765','DIESEL',163262,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9075 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077137','ESSENCE',118870,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2557 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078770','DIESEL',115203,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2558 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078961','DIESEL',138864,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2590 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078650','DIESEL',126651,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2556 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079195','DIESEL',224758,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2641 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079085','DIESEL',103145,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2568 RB','NISSAN','NP300',NULL,NULL,'DIESEL',172768,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BV 4088 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077494','DIESEL',116114,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BV 4054 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0076996','DIESEL',162568,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2625 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079046','DIESEL',121154,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2575RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079050','DIESEL',158784,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2567 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078812','DIESEL',86496,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2634 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079132','DIESEL',135969,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 5119 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0076959','DIESEL',106968,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BU 1031 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077292','DIESEL',86968,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2585 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079200','DIESEL',166034,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9076 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077919','DIESEL',115035,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2583 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079160','DIESEL',123181,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BX 2089 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077527','DIESEL',126213,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BV 3354 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077611','DIESEL',185236,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2630 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078851','DIESEL',117333,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2596 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079169','ESSENCE',73867,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2574 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078737','DIESEL',142917,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BX 2084 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077425','DIESEL',137555,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2563 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079167','ESSENCE',86271,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BS 6238 RB','NISSAN','HARDBODY',NULL,NULL,'DIESEL',188333,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BR 0471 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0066896','DIESEL',98875,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BX 2085 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077609','DIESEL',96128,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BU 6960 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077059','DIESEL',133353,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9081 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077774','DIESEL',142608,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2564 RB','NISSAN','NP300',NULL,NULL,'DIESEL',112847,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BV 7693 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077914','DIESEL',137980,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BX 9160 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078968','DIESEL',104576,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2560 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078912','DIESEL',113518,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BX 7347 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077312','DIESEL',98298,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9143 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077349','DIESEL',86805,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2603 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0079049','DIESEL',166450,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BS 6239 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077607','DIESEL',182560,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BV 7696 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077913','DIESEL',157395,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2640 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078917','DIESEL',146093,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BS 6236 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0078657','DIESEL',123079,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 2622 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0078691','DIESEL',135151,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 9446 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077612','DIESEL',190097,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BE 8665 RB','NISSAN','HARDBODY',NULL,'ADNAPUD22Z0045714','DIESEL',101842,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BR 0473 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z00670224','DIESEL',222714,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BX 1868 RB','NISSAN','HARDBODY',NULL,NULL,'DIESEL',149755,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 2559 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0078915','DIESEL',185812,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 2579 RB','NISSAN','NP300',NULL,NULL,'DIESEL',104755,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BS 6235 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077662','DIESEL',149386,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BR 0467 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z0066947','DIESEL',146359,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9436 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077311','DIESEL',129897,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 2620 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0078813','DIESEL',109628,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 2638 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0078815','DIESEL',89155,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 9439 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077978','DIESEL',165900,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 2615 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0078807','DIESEL',115289,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BU 7228 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077691','DIESEL',171397,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BX 2592 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077044','DIESEL',105589,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BV 3356 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z0077767','DIESEL',139921,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BX 2086 RB','NISSAN','HARDBODY',NULL,'ADNCPUD22Z0077529','DIESEL',145451,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'HARDBODY'),1),
+  ('BT 9073 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z0077387','DIESEL',72531,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9082 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z007710','DIESEL',49310,'LEASING','LEASING',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('CJ 1420 RB','FOTON','BJ6730',NULL,'LVCB3RBB8PMO04978','DIESEL',2823,'LLD','LLD',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'FOTON' AND nom = 'BJ6730'),1),
+  ('CD 3643 RB','TOYOTA','COROLLA CROSS',NULL,'AHTKFCAG900612088','ESSENCE',40534,'LLD','LLD arcs',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'COROLLA CROSS'),1),
+  ('CC 7714 RB','TOYOTA','FORTUNER',NULL,'AHTKB3FS900260154','DIESEL',49659,'LLD','LLD arcs',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'FORTUNER'),1),
+  ('CD 6553 RB','TOYOTA','RAV4',NULL,'JTMR43FV80D47043','ESSENCE',42412,'LLD','LLD arcs',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'RAV4'),1),
+  ('CD 4328 RB','TOYOTA','HILUX',NULL,'AHTKB8CD902986863','DIESEL',99013,'LLD','LLD arcs',(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('CC 5409 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00271947','ESSENCE',33461,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('BT 2550 RB','NISSAN','NP300',NULL,'ADNCPUD22Z0077764','DIESEL',113148,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('CC 5403 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH041486','DIESEL',79567,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 5488 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH041081','DIESEL',97136,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 5541 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00272181','ESSENCE',63087,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 4028 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00216561','ESSENCE',26039,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 4022 RB','TOYOTA','PRADO',NULL,'JTEBR3FJ60K259897','DIESEL',41684,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'PRADO'),1),
+  ('CC 5400 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH040685','DIESEL',110558,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 6482 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00271139','ESSENCE',33799,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 5404 RB','MITSUBISHI','L200','DOUBLE CABINE','MMBJNKL30PH041716','DIESEL',52495,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 5402 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH041558','DIESEL',71030,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 3594 RB','TOYOTA','RAV4',NULL,'JTMR43FV30D036127','ESSENCE',74551,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'RAV4'),1),
+  ('CC 5406 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00230136','ESSENCE',64022,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 5401 RB','MITSUBISHI','L200',NULL,'MMBJNKL30PH041526','DIESEL',56838,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 9887 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00271597',NULL,57040,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CD 1058 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00233431','ESSENCE',58978,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 4026 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S0022528','ESSENCE',29377,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 5408 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00229334','ESSENCE',33482,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 5407 RB','TOYOTA','STARLET',NULL,'JTDJWCA3S00228013','ESSENCE',35450,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'STARLET'),1),
+  ('CC 3615 RB','TOYOTA','RAV4',NULL,'JTMR43FV90D036486','ESSENCE',38840,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'RAV4'),1),
+  ('CC 5405 RB','MITSUBISHI','L200','DOUBLE CABINE','MMBJNKL30PH041260','DIESEL',82090,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CC 5399 RB','MITSUBISHI','L200','DOUBLE CABINE','MMBJNKL30PH040641','DIESEL',96636,'AUTRE','Moov Africa (Bénin)',(SELECT id_centre FROM centre WHERE nom = 'MOOV BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'MITSUBISHI' AND nom = 'L200'),1),
+  ('CG 1739 RB','TOYOTA','HILUX','4x4','MR0DB8CD500190159','DIESEL',61349,'AUTRE','SOGEA SATOM',(SELECT id_centre FROM centre WHERE nom = 'SOGEA SATOM'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('BZ 5857 RB','NISSAN','KICKS',NULL,'3N1CP5C90LL509659','ESSENCE',66712,'AUTRE','SOGEA SATOM',(SELECT id_centre FROM centre WHERE nom = 'SOGEA SATOM'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('BS 1125 RB','TOYOTA','HILUX',NULL,'AHTKK8CD200677831','DIESEL',54687,'AUTRE','SOGEA SATOM',(SELECT id_centre FROM centre WHERE nom = 'SOGEA SATOM'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('CC 7768 RB','TOYOTA','HILUX',NULL,'AHTKB8CD502986150','DIESEL',85931,'LCD','LCD',(SELECT id_centre FROM centre WHERE nom = 'SOGEA SATOM'),'2023-04-29','2023-04-29','ENTREE_PARC','2027-06-06','2026-12-31',NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('BZ 6087 RB','NISSAN','KICKS',NULL,'3N1CP5C90LL513212','ESSENCE',94120,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'ADJANOHOUN Marie-Rosaline'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('BL 0359 RB','TOYOTA','HIACE',NULL,'JTFJK02P500027937','DIESEL',150824,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HIACE'),1),
+  ('BS 1132 RB','TOYOTA','HILUX',NULL,'AHTKK8CD300677920','DIESEL',49329,'AUTRE',NULL,NULL,NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('BX 9146 RB','INCONNU','À PRÉCISER',NULL,NULL,'DIESEL',82769,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'INCONNU' AND nom = 'À PRÉCISER'),1),
+  ('BS 1124 RB','TOYOTA','HILUX',NULL,'AHTKK8CD400677930','DIESEL',9113,'AUTRE',NULL,NULL,NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'TOYOTA' AND nom = 'HILUX'),1),
+  ('127 OI 12','NISSAN','KICKS',NULL,'3N1CP5CP6RL460975','ESSENCE',5160,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'AMICHIA Sandra'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('BV 4068 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z0077700','DIESEL',98791,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BV 4103 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z0077670','DIESEL',21799,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('BT 9078 RB','NISSAN','NP300','PICK UP','ADNCPUD22Z0077704','DIESEL',96542,'AUTRE',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'NP300'),1),
+  ('CE 4219 RB','NISSAN','KICKS',NULL,NULL,'ESSENCE',75020,'LCD',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),NULL,NULL,'ENTREE_PARC',NULL,NULL,NULL,(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CL 4295 RB','NISSAN','KICKS',NULL,NULL,'ESSENCE',3981,'LCD',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-06-02','2026-06-02','ENTREE_PARC','2027-06-12','2026-12-31','VL ajouté a la liste',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1),
+  ('CL 4301 RB','NISSAN','KICKS',NULL,NULL,'ESSENCE',4753,'LCD',NULL,(SELECT id_centre FROM centre WHERE nom = 'ARCS BENIN'),'2026-06-02','2026-06-02','ENTREE_PARC','2027-06-11','2026-12-31','VL ajouté a la liste',(SELECT id_categorie FROM modele_vehicule WHERE marque = 'NISSAN' AND nom = 'KICKS'),1);
+-- ---- Traçabilité : entrée au parc des véhicules dont la date de mise en service est connue ----
+INSERT IGNORE INTO mouvement_vehicule (type_mouvement, date_mouvement, id_vehicule, observation) VALUES
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4231RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-04-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC6287RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2021-09-02', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BY4289RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-04-29', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC7766RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-06-06', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CD0713RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2021-01-07', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BV5891RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4223RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-06-06', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CD0695RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4221RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-06-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CD1334RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-05-26', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC9893RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4225RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-07-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CD3650RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2021-01-01', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ1583RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-05-26', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC9891RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4216RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2022-02-18', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BZ5993RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2024-09-09', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CG1136RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2024-04-02', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CF1082RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4218RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4226RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-07-14', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CD3678RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-12-13', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4217RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2022-02-18', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BZ5861RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2024-10-08', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CG2952RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-04-12', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC6140RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-08-06', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ2382RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-04-01', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK9650RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-04-01', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK9655RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-08-06', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ2381RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-10-15', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ4697RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-01-22', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK4374RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-01-16', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK3841RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-10-20', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ7593RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-12-23', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK2259RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2024-02-07', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE7816RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-10-15', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ4694RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-08-06', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ2385RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-10-20', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ7590RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-12-27', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK2606RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2025-12-27', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK2607RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-01-16', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK3840RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-01-16', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK3863RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-01-16', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CK3851RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2023-04-29', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC7768RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-06-02', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CL4295RB'), 'Mise en service (fichier PARC_LCD)'),
+  ('ENTREE_PARC', '2026-06-02', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CL4301RB'), 'Mise en service (fichier PARC_LCD)');
+-- ---- Réservation en cours : le statut du véhicule suit le dernier mouvement ----
+INSERT IGNORE INTO mouvement_vehicule (type_mouvement, date_mouvement, id_vehicule, observation) VALUES
+  ('RESERVATION', NOW(), (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC6287RB'), 'Véhicule réservé pour une réservation de démonstration');
+UPDATE vehicule
+SET statut = 'RESERVATION'
+WHERE immatriculation_normalisee = 'CC6287RB';
+-- ---- Sinistres signalés dans les observations ----
+INSERT IGNORE INTO sinistre (date_sinistre, type_sinistre, description, immobilisant, statut, id_vehicule) VALUES
+  ('2026-07-24', 'ACCIDENT', 'accidenté 24/07/2026', TRUE, 'DECLARE', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CE4231RB')),
+  ('2026-06-29', 'ACCIDENT', 'accidenté 29/06/2026', TRUE, 'DECLARE', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ1583RB')),
+  ('2026-10-14', 'EPAVE', 'Épave signalée dans le fichier parc (date exacte inconnue : date d''enregistrement). epave', TRUE, 'EPAVE', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CF1086RB'));
+-- ---- Véhicules au garage signalés dans les observations : passage ouvert + mouvement d'envoi ----
+-- (la date d'entrée réelle est inconnue : on retient la date d'enregistrement ; à corriger si besoin)
+INSERT IGNORE INTO passage_garage (type_passage, date_entree, statut, motif, id_vehicule, id_garage) VALUES
+  ('REPARATION', '2026-10-14', 'EN_COURS', 'Date d''entrée inconnue (date d''enregistrement). Garage Rousseau /immobilisée depuis plus de 6 mois', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BV5891RB'), (SELECT id_garage FROM garage WHERE nom = 'Garage Rousseau')),
+  ('REPARATION', '2026-10-14', 'EN_COURS', 'Date d''entrée inconnue (date d''enregistrement). Garage Rousseau', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC6140RB'), (SELECT id_garage FROM garage WHERE nom = 'Garage Rousseau')),
+  ('REPARATION', '2026-10-14', 'EN_COURS', 'Date d''entrée inconnue (date d''enregistrement). garage japanmotors', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ2382RB'), (SELECT id_garage FROM garage WHERE nom = 'Japan Motors')),
+  ('REPARATION', '2026-10-14', 'EN_COURS', 'Date d''entrée inconnue (date d''enregistrement). garage japanmotors', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ4697RB'), (SELECT id_garage FROM garage WHERE nom = 'Japan Motors'));
+INSERT IGNORE INTO mouvement_vehicule (type_mouvement, motif, date_mouvement, id_vehicule, id_passage, observation) VALUES
+  ('ENVOI_GARAGE', 'GARAGE', '2026-10-14', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BV5891RB'), (SELECT MAX(id_passage) FROM passage_garage WHERE id_vehicule = (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'BV5891RB')), 'Date inconnue (date d''enregistrement)'),
+  ('ENVOI_GARAGE', 'GARAGE', '2026-10-14', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC6140RB'), (SELECT MAX(id_passage) FROM passage_garage WHERE id_vehicule = (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CC6140RB')), 'Date inconnue (date d''enregistrement)'),
+  ('ENVOI_GARAGE', 'GARAGE', '2026-10-14', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ2382RB'), (SELECT MAX(id_passage) FROM passage_garage WHERE id_vehicule = (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ2382RB')), 'Date inconnue (date d''enregistrement)'),
+  ('ENVOI_GARAGE', 'GARAGE', '2026-10-14', (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ4697RB'), (SELECT MAX(id_passage) FROM passage_garage WHERE id_vehicule = (SELECT id_vehicule FROM vehicule WHERE immatriculation_normalisee = 'CJ4697RB')), 'Date inconnue (date d''enregistrement)');
 
-INSERT INTO vehicule (id, immatriculation, marque_modele, categorie, kilometrage, statut) VALUES
-  (1, 'AA 4821 RB', 'Toyota Corolla', 'Berline', 42650, 'Disponible'),
-  (2, 'BB 1374 RB', 'Hyundai Tucson', 'SUV', 28100, 'En location'),
-  (3, 'CC 9082 RB', 'Mercedes Classe C', 'Premium', 35820, 'Entretien'),
-  (4, 'AB 4510 RB', 'Suzuki Dzire', 'Citadine', 51240, 'Disponible')
-ON DUPLICATE KEY UPDATE
-  marque_modele = VALUES(marque_modele), categorie = VALUES(categorie),
-  kilometrage = VALUES(kilometrage), statut = VALUES(statut);
-
-INSERT INTO location (reference, client_id, vehicule_id, commercial_id, type, date_debut, date_fin, montant, statut) VALUES
-  ('LOC-02581', 1, 2, 1, 'Longue durée', '2025-06-01', '2025-09-30', 6200000, 'En cours'),
-  ('LOC-02579', 2, 1, 2, 'Courte durée', '2025-06-18', '2025-06-24', 900000, 'À retourner'),
-  ('LOC-02572', 3, 3, 3, 'Longue durée', '2025-01-05', '2025-12-31', 9900000, 'En cours'),
-  ('LOC-02561', 4, 4, 1, 'Courte durée', '2025-06-10', '2025-06-16', 1400000, 'Retourné')
-ON DUPLICATE KEY UPDATE
-  client_id = VALUES(client_id), vehicule_id = VALUES(vehicule_id),
-  commercial_id = VALUES(commercial_id), type = VALUES(type),
-  date_debut = VALUES(date_debut), date_fin = VALUES(date_fin),
-  montant = VALUES(montant), statut = VALUES(statut);
-
-INSERT INTO reservation (reference, client_id, vehicule_id, commercial_id, date_depart, duree_jours, statut) VALUES
-  ('RES-20841', 5, 1, 1, '2025-06-18', 3, 'Aboutie'),
-  ('RES-20839', 6, 2, 2, '2025-06-18', 6, 'Confirmée'),
-  ('RES-20835', 7, NULL, 3, '2025-06-19', 1, 'En attente'),
-  ('RES-20828', 8, 1, 1, '2025-06-15', 3, 'Non aboutie')
-ON DUPLICATE KEY UPDATE
-  client_id = VALUES(client_id), vehicule_id = VALUES(vehicule_id),
-  commercial_id = VALUES(commercial_id), date_depart = VALUES(date_depart),
-  duree_jours = VALUES(duree_jours), statut = VALUES(statut);
-
-INSERT INTO maintenance (vehicule_id, date_entree, date_sortie, motif, cout, remplacement_id, statut) VALUES
-  (3, '2025-06-10', NULL, 'Révision 30 000 km + plaquettes', 185000, 4, 'En cours');
-
-INSERT INTO mouvement (vehicule_id, type, date_mouvement, commentaire) VALUES
-  (1, 'Acquisition', '2023-03-12', 'Achat concessionnaire Cotonou'),
-  (2, 'Acquisition', '2023-06-04', 'Achat concessionnaire Cotonou'),
-  (3, 'Acquisition', '2022-11-20', 'Import occasion Allemagne'),
-  (4, 'Acquisition', '2023-09-15', 'Achat concessionnaire Cotonou'),
-  (2, 'Mise en location', '2025-06-01', 'LOC-02581 Groupe Tèkponon'),
-  (4, 'Retour', '2025-06-16', 'LOC-02561 Jean Loko'),
-  (3, 'Maintenance', '2025-06-10', 'Révision 30 000 km');
+SET @import_historique = 0;

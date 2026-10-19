@@ -29,9 +29,9 @@
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
-CREATE DATABASE IF NOT EXISTS gestion_location_hertz
+CREATE DATABASE IF NOT EXISTS hertz_benin
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE gestion_location_hertz;
+USE hertz_benin;
 
 -- =====================================================================================
 -- 1. TABLES DE RÉFÉRENCE
@@ -195,11 +195,12 @@ CREATE TABLE vehicule (
   date_entree_parc   DATE         NULL,
   date_sortie_parc   DATE         NULL,
   prix_vente         DECIMAL(14,2) NULL CHECK (prix_vente IS NULL OR prix_vente >= 0),
-  statut             ENUM('DISPONIBLE','LOUE','EN_SORTIE','AU_GARAGE','IMMOBILISE','VENDU') NOT NULL DEFAULT 'DISPONIBLE',
+  statut             ENUM('ENTREE_PARC','MISE_EN_LOCATION','RETOUR_LOCATION','SORTIE_INTERNE','RETOUR_INTERNE',
+                           'ENVOI_GARAGE','RETOUR_GARAGE','SORTIE_DEFINITIVE','RESERVATION') NOT NULL DEFAULT 'ENTREE_PARC',
   date_prochaine_visite_technique DATE NULL,
   date_expiration_assurance       DATE NULL,
   observation        VARCHAR(255) NULL,               -- « Observations particulières » (ex. Utilisé par le DAF)
-  id_categorie       INT NOT NULL,
+  id_categorie       INT NULL,
   id_administrateur  INT NOT NULL,
   UNIQUE KEY uq_vehicule_immat (immatriculation_normalisee),
   CONSTRAINT fk_vehicule_modele    FOREIGN KEY (marque, modele) REFERENCES modele_vehicule(marque, nom) ON UPDATE CASCADE,
@@ -537,11 +538,11 @@ CREATE TABLE sinistre (
 CREATE TABLE mouvement_vehicule (
   id_mouvement          INT AUTO_INCREMENT PRIMARY KEY,
   type_mouvement        ENUM('ENTREE_PARC','MISE_EN_LOCATION','RETOUR_LOCATION','SORTIE_INTERNE','RETOUR_INTERNE',
-                             'ENVOI_GARAGE','RETOUR_GARAGE','SORTIE_DEFINITIVE') NOT NULL,
+                             'ENVOI_GARAGE','RETOUR_GARAGE','SORTIE_DEFINITIVE','RESERVATION') NOT NULL,
   motif                 ENUM('LOCATION','COURSE','TRANSFERT','LAVAGE','CARBURANT','MISE_A_DISPOSITION',
                              'PRESENTATION_CLIENT','REORGANISATION_PARKING','IMPRO','GARAGE','REVISION',
                              'VISITE_TECHNIQUE','AUTRE') NULL,
-  date_mouvement        DATETIME NOT NULL,               -- date + heure (départ ou retour)
+  date_mouvement        DATETIME NOT  NULL,               -- date + heure (départ ou retour)
   date_retour_prevue    DATETIME NULL,                   -- renseignée sur les départs
   kilometrage           INT NULL CHECK (kilometrage IS NULL OR kilometrage >= 0),
   observation           VARCHAR(255) NULL,
@@ -781,7 +782,7 @@ BEGIN
   IF COALESCE(@import_historique, 0) = 0 THEN
     IF NEW.type_mouvement IN ('MISE_EN_LOCATION','SORTIE_INTERNE','ENVOI_GARAGE','SORTIE_DEFINITIVE') THEN
       SELECT statut INTO v_statut FROM vehicule WHERE id_vehicule = NEW.id_vehicule;
-      IF v_statut <> 'DISPONIBLE' AND NOT (NEW.type_mouvement = 'ENVOI_GARAGE' AND v_statut = 'IMMOBILISE') THEN
+      IF v_statut <> 'ENTREE_PARC' AND NOT (NEW.type_mouvement = 'ENVOI_GARAGE' AND v_statut = 'ENVOI_GARAGE') THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Mouvement impossible : le véhicule n''est pas disponible.';
       END IF;
     ELSEIF NEW.type_mouvement IN ('RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE') THEN
@@ -814,15 +815,18 @@ BEGIN
   IF COALESCE(@import_historique, 0) = 0 THEN
     UPDATE vehicule
        SET statut = CASE NEW.type_mouvement
-                      WHEN 'ENTREE_PARC'       THEN 'DISPONIBLE'
-                      WHEN 'MISE_EN_LOCATION'  THEN 'LOUE'
-                      WHEN 'SORTIE_INTERNE'    THEN 'EN_SORTIE'
-                      WHEN 'ENVOI_GARAGE'      THEN 'AU_GARAGE'
-                      WHEN 'SORTIE_DEFINITIVE' THEN 'VENDU'
-                      WHEN 'RETOUR_GARAGE'     THEN 'DISPONIBLE'
+                      WHEN 'ENTREE_PARC'       THEN 'ENTREE_PARC'
+                      WHEN 'MISE_EN_LOCATION'  THEN 'MISE_EN_LOCATION'
+                      WHEN 'SORTIE_INTERNE'    THEN 'SORTIE_INTERNE'
+                      WHEN 'ENVOI_GARAGE'      THEN 'ENVOI_GARAGE'
+                      WHEN 'SORTIE_DEFINITIVE' THEN 'SORTIE_DEFINITIVE'
+                      WHEN 'RESERVATION'       THEN 'RESERVATION'
+                      WHEN 'RETOUR_LOCATION'   THEN 'RETOUR_LOCATION'
+                      WHEN 'RETOUR_INTERNE'    THEN 'RETOUR_INTERNE'
+                      WHEN 'RETOUR_GARAGE'     THEN 'RETOUR_GARAGE'
                       ELSE CASE WHEN EXISTS (SELECT 1 FROM sinistre s WHERE s.id_vehicule = NEW.id_vehicule
                                               AND s.immobilisant = 1 AND s.statut <> 'CLOS')
-                                THEN 'IMMOBILISE' ELSE 'DISPONIBLE' END   -- retour de location / sortie interne
+                                THEN 'ENVOI_GARAGE' ELSE 'ENTREE_PARC' END
                     END,
            kilometrage = GREATEST(kilometrage, COALESCE(NEW.kilometrage, 0)),
            date_sortie_parc = CASE WHEN NEW.type_mouvement = 'SORTIE_DEFINITIVE'
@@ -941,8 +945,8 @@ END//
 CREATE TRIGGER trg_sinistre_ai AFTER INSERT ON sinistre FOR EACH ROW
 BEGIN
   IF NEW.immobilisant = 1 AND NEW.statut <> 'CLOS' AND COALESCE(@import_historique, 0) = 0 THEN
-    UPDATE vehicule SET statut = 'IMMOBILISE'
-     WHERE id_vehicule = NEW.id_vehicule AND statut IN ('DISPONIBLE','EN_SORTIE');
+    UPDATE vehicule SET statut = 'ENVOI_GARAGE'
+     WHERE id_vehicule = NEW.id_vehicule AND statut IN ('ENTREE_PARC','SORTIE_INTERNE');
   END IF;
 END//
 
@@ -951,7 +955,7 @@ BEGIN
   IF NEW.statut = 'CLOS' AND OLD.statut <> 'CLOS' AND COALESCE(@import_historique, 0) = 0 THEN
     IF NOT EXISTS (SELECT 1 FROM sinistre s WHERE s.id_vehicule = NEW.id_vehicule
                     AND s.immobilisant = 1 AND s.statut <> 'CLOS') THEN
-      UPDATE vehicule SET statut = 'DISPONIBLE' WHERE id_vehicule = NEW.id_vehicule AND statut = 'IMMOBILISE';
+      UPDATE vehicule SET statut = 'ENTREE_PARC' WHERE id_vehicule = NEW.id_vehicule AND statut = 'ENVOI_GARAGE';
     END IF;
   END IF;
 END//
@@ -1109,7 +1113,7 @@ CREATE OR REPLACE VIEW v_vehicules_remplacement_disponibles AS
 SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, cat.libelle AS categorie
   FROM vehicule v
   JOIN categorie_vehicule cat ON cat.id_categorie = v.id_categorie
- WHERE v.statut = 'DISPONIBLE'
+ WHERE v.statut = 'ENTREE_PARC'
    AND NOT EXISTS (SELECT 1 FROM reservation r
                     WHERE r.id_vehicule = v.id_vehicule
                       AND r.statut IN ('CONFIRMEE','EN_ATTENTE')
@@ -1303,7 +1307,7 @@ SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehi
        v.date_prochaine_visite_technique, DATEDIFF(v.date_prochaine_visite_technique, CURRENT_DATE) AS jours_avant_visite_technique,
        v.date_expiration_assurance,       DATEDIFF(v.date_expiration_assurance, CURRENT_DATE)       AS jours_avant_fin_assurance
   FROM vehicule v
- WHERE v.statut <> 'VENDU'
+ WHERE v.statut <> 'SORTIE_DEFINITIVE'
    AND (DATEDIFF(v.date_prochaine_visite_technique, CURRENT_DATE) <= 60
         OR DATEDIFF(v.date_expiration_assurance, CURRENT_DATE) <= 60);
 
@@ -1581,17 +1585,17 @@ BEGIN
   UPDATE vehicule v
     JOIN mouvement_vehicule m ON m.id_vehicule = v.id_vehicule
      SET v.statut = CASE m.type_mouvement
-                      WHEN 'MISE_EN_LOCATION'  THEN 'LOUE'
-                      WHEN 'SORTIE_INTERNE'    THEN 'EN_SORTIE'
-                      WHEN 'ENVOI_GARAGE'      THEN 'AU_GARAGE'
-                      WHEN 'SORTIE_DEFINITIVE' THEN 'VENDU'
-                      ELSE 'DISPONIBLE' END
+                      WHEN 'MISE_EN_LOCATION'  THEN 'MISE_EN_LOCATION'
+                      WHEN 'SORTIE_INTERNE'    THEN 'SORTIE_INTERNE'
+                      WHEN 'ENVOI_GARAGE'      THEN 'ENVOI_GARAGE'
+                      WHEN 'SORTIE_DEFINITIVE' THEN 'SORTIE_DEFINITIVE'
+                      ELSE 'ENTREE_PARC' END
    WHERE NOT EXISTS (SELECT 1 FROM mouvement_vehicule m2
                       WHERE m2.id_vehicule = m.id_vehicule
                         AND (m2.date_mouvement > m.date_mouvement
                              OR (m2.date_mouvement = m.date_mouvement AND m2.id_mouvement > m.id_mouvement)));
-  UPDATE vehicule v SET v.statut = 'IMMOBILISE'
-   WHERE v.statut = 'DISPONIBLE'
+  UPDATE vehicule v SET v.statut = 'ENVOI_GARAGE'
+   WHERE v.statut = 'ENTREE_PARC'
      AND EXISTS (SELECT 1 FROM sinistre s WHERE s.id_vehicule = v.id_vehicule AND s.immobilisant = 1 AND s.statut <> 'CLOS');
   UPDATE vehicule v
      SET v.kilometrage = GREATEST(v.kilometrage,

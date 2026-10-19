@@ -8,10 +8,22 @@ import { vehiculesRouter } from "./modules/vehicules/routes.js"
 import { listsRouter } from "./modules/lists/routes.js"
 import { statsRouter } from "./modules/stats/routes.js"
 import { pdfRouter } from "./modules/pdf/routes.js"
+import { parcRouter } from "./modules/parc/categoriesRoutes.js"
+import { asyncHandler } from "./middleware/asyncHandler.js"
 
 async function main(): Promise<void> {
   const env = loadEnv()
   const repos = await repositories(env)
+  const refreshLocationStatuses = async () => {
+    try {
+      await repos.locations.refreshStatuses()
+    } catch (error) {
+      console.error("Mise à jour des statuts de location impossible :", error)
+    }
+  }
+  await refreshLocationStatuses()
+  const locationStatusTimer = setInterval(() => void refreshLocationStatuses(), 60_000)
+  locationStatusTimer.unref()
 
   const app = express()
   app.use(cors({ origin: env.CORS_ORIGIN.split(",").map((o) => o.trim()) }))
@@ -20,8 +32,16 @@ async function main(): Promise<void> {
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", driver: env.DB_DRIVER, at: new Date().toISOString() })
   })
+  app.get(
+    "/api/public/metrics",
+    asyncHandler(async (_req, res) => {
+      const vehicles = await repos.vehicules.list()
+      res.json({ vehiclesTotal: vehicles.length })
+    }),
+  )
 
   app.use("/api/auth", authRouter(repos, env))
+  app.use("/api/parc", parcRouter(repos, env))
   app.use("/api/vehicules", vehiculesRouter(repos, env))
   app.use("/api", listsRouter(repos, env))
   app.use("/api/stats", statsRouter(repos, env))

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
-import { Link, Navigate, useNavigate } from "react-router-dom"
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom"
 import Logo from "@/shared/components/Logo"
 import Icon from "@/shared/components/Icon"
 import { LOGIN_PHOTO } from "@/shared/data/mockData"
@@ -10,6 +10,7 @@ import { useAuth } from "@/features/auth/AuthContext"
 export default function LoginPage() {
   const { isAuthenticated, login } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [showPassword, setShowPassword] = useState(false)
   const [email, setEmail] = useState("responsable@hertz.bj")
   const [password, setPassword] = useState("hertz2025")
@@ -23,7 +24,10 @@ export default function LoginPage() {
     setError(null)
     setPending(true)
     login(email, password)
-      .then(() => navigate(ROUTES.dashboard))
+      .then(() => {
+        const from = (location.state as { from?: string } | null)?.from
+        navigate(from ?? ROUTES.dashboard, { replace: true })
+      })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "Connexion impossible")
         setPending(false)
