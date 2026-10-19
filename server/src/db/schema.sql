@@ -777,7 +777,24 @@ BEGIN
   IF COALESCE(@import_historique, 0) = 0 THEN
     IF NEW.type_mouvement IN ('MISE_EN_LOCATION','SORTIE_INTERNE','ENVOI_GARAGE','SORTIE_DEFINITIVE') THEN
       SELECT statut INTO v_statut FROM vehicule WHERE id_vehicule = NEW.id_vehicule;
-      IF v_statut <> 'DISPONIBLE' AND NOT (NEW.type_mouvement = 'ENVOI_GARAGE' AND v_statut = 'IMMOBILISE') THEN
+      IF v_statut <> 'DISPONIBLE'
+         AND NOT (NEW.type_mouvement = 'ENVOI_GARAGE' AND v_statut = 'IMMOBILISE')
+         AND NOT (
+           NEW.type_mouvement = 'MISE_EN_LOCATION'
+           AND v_statut = 'LOUE'
+           AND NEW.id_location IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+               FROM location nouvelle
+               JOIN location existante
+                 ON existante.id_vehicule = nouvelle.id_vehicule
+                AND existante.id_location <> nouvelle.id_location
+              WHERE nouvelle.id_location = NEW.id_location
+                AND existante.statut IN ('EN_COURS', 'EN_RETARD')
+                AND existante.date_debut < nouvelle.date_fin_prevue
+                AND COALESCE(existante.date_retour_reelle, existante.date_fin_prevue) > nouvelle.date_debut
+           )
+         ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Mouvement impossible : le véhicule n''est pas disponible.';
       END IF;
     ELSEIF NEW.type_mouvement IN ('RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE') THEN

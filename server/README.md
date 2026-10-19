@@ -19,10 +19,22 @@ Pour utiliser la base XAMPP existante `gestion_location_hertz`, configurez
 
 La base existante contient déjà ses données : ne lancez ni `db:migrate` ni
 `db:import-parc` dessus. `db:migrate` refuse désormais toute base qui contient
-déjà des tables, vues, procédures, triggers ou événements. Le dépôt MySQL est
-adapté au schéma détaillé Hertz pour les listes, les fiches, les statistiques,
-la disponibilité, ainsi que la création de clients et de véhicules. Les autres
-opérations d'écriture ne sont pas encore implémentées.
+déjà des tables, vues, procédures, triggers ou événements. Le dépôt MySQL prend
+en charge les listes, les fiches, les statistiques, la disponibilité et les
+écritures de clients, commerciaux, véhicules, réservations et locations.
+
+Pour une base déjà initialisée, appliquez séparément les migrations compatibles
+avec ses données. En particulier, la migration
+`src/db/migrations/001_allow_non_overlapping_rentals.sql` corrige le contrôle
+des locations successives sans chevauchement. Elle ne modifie aucune ligne de
+données. Exemple avec le client MySQL installé :
+
+```bash
+mysql -h 127.0.0.1 -u hertz -p gestion_location_hertz < src/db/migrations/001_allow_non_overlapping_rentals.sql
+```
+
+Vérifiez le nom de la base et les paramètres de connexion avant d'exécuter une
+migration sur une base partagée.
 
 ## Initialiser une nouvelle base vide
 
@@ -66,9 +78,13 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | PUT     | `/vehicules/:id`                       | resp | modification                             |
 | DELETE  | `/vehicules/:id`                       | resp | 204, 409 si lié à location/résa         |
 | GET     | `/clients`, `/clients/:id`, `/clients/:id/fiche` | resp | + fiche enrichie (nb locations, dernière opération) |
+| POST/PUT/DELETE | `/clients`, `/clients/:id`           | resp | création, modification, suppression protégée si historique |
 | GET     | `/commerciaux`, `/commerciaux/:id`     | resp | fiches avec CA + performance calculés    |
+| POST/PUT/DELETE | `/commerciaux`, `/commerciaux/:id`  | resp | création, modification, désactivation    |
 | GET     | `/locations?q&limit`, `/locations/:id` | resp | fiches avec noms client/véhicule         |
+| POST    | `/locations`                           | resp | création LCD/LLD avec contrôle de disponibilité |
 | GET     | `/reservations`, `/reservations/:id`   | resp | fiches avec noms client/commercial       |
+| POST    | `/reservations`                        | resp | création avec client, commercial et véhicule associés |
 | GET     | `/maintenances`, `/maintenances/:id`   | resp | passages garage                          |
 | GET     | `/mouvements?vehiculeId`               | resp | flux chronologiques                      |
 | GET     | `/stats/overview`, `/stats/monthly`    | resp | KPIs + série mensuelle                   |

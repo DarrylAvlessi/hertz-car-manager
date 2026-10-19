@@ -83,8 +83,7 @@ function idParam(value: string): number {
   return id
 }
 
-// Listes + détails et création client. Les autres écritures métier restent
-// dans les modules dédiés de chaque lot.
+// Listes, fiches et écritures des clients, commerciaux, réservations et locations.
 export function listsRouter(repos: Repositories, env: Env): Router {
   const router = Router()
   const guard = [requireAuth(env.JWT_SECRET), requireRole("responsable", "admin")]
