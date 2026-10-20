@@ -121,17 +121,25 @@ export default function ReferenceCrudPage({ kind }: { kind: Kind }) {
     <section className="data-card">
       <div className="data-toolbar">
         <div>
-          <input className="table-search" placeholder="Rechercher…" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1) }} />
           <h2>
             {kind === "categories"
               ? "Catégories véhicules"
               : "Modèles véhicules"}
           </h2>
-          <p>{rows.length} éléments affichés</p>
+          <p>{filteredRows.length} éléments affichés</p>
         </div>
-        <button className="primary small" onClick={() => setEditing(null)}>
-          <Icon name="plus" size={17} /> Ajouter
-        </button>
+        <div>
+          <input
+            className="table-search"
+            placeholder="Rechercher…"
+            aria-label={kind === "categories" ? "Rechercher une catégorie" : "Rechercher un modèle"}
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setPage(1) }}
+          />
+          <button className="primary small" onClick={() => setEditing(null)}>
+            <Icon name="plus" size={17} /> Ajouter
+          </button>
+        </div>
       </div>
       {error && <p className="form-error">{error}</p>}
       {loading ? (

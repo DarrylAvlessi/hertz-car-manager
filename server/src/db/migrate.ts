@@ -7,6 +7,16 @@ import mysql from "mysql2/promise"
 import { loadEnv } from "../config/env.js"
 
 const here = dirname(fileURLToPath(import.meta.url))
+const vehicleForeignKeys = [
+  ["reservation", "fk_resa_vehicule", "id_vehicule"],
+  ["location", "fk_loc_vehicule", "id_vehicule"],
+  ["passage_garage", "fk_pg_vehicule", "id_vehicule"],
+  ["passage_garage", "fk_pg_remplace", "id_vehicule_remplacement"],
+  ["sinistre", "fk_sinistre_vehicule", "id_vehicule"],
+  ["mouvement_vehicule", "fk_mvt_vehicule", "id_vehicule"],
+  ["vente_vehicule", "fk_vente_vehicule", "id_vehicule"],
+  ["contravention", "fk_contrav_vehicule", "id_vehicule"],
+] as const
 
 function splitStatements(sql: string): string[] {
   const withoutComments = sql
@@ -48,6 +58,25 @@ async function main(): Promise<void> {
         await connection.query(stmt)
       }
       if (file === "schema.sql") {
+        for (const [table, constraint, column] of vehicleForeignKeys) {
+          const [existingConstraint] = await connection.query<mysql.RowDataPacket[]>(
+            `SELECT CONSTRAINT_NAME
+               FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+              WHERE CONSTRAINT_SCHEMA = DATABASE()
+                AND TABLE_NAME = ?
+                AND CONSTRAINT_NAME = ?
+                AND CONSTRAINT_TYPE = 'FOREIGN KEY'`,
+            [table, constraint],
+          )
+          if (existingConstraint.length === 0) {
+            await connection.query(
+              `ALTER TABLE \`${table}\`
+               ADD CONSTRAINT \`${constraint}\`
+               FOREIGN KEY (\`${column}\`) REFERENCES vehicule(id_vehicule)`,
+            )
+          }
+        }
+
         const [vehiclePurchaseColumns] = await connection.query<mysql.RowDataPacket[]>(
           `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()

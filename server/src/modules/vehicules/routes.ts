@@ -3,7 +3,6 @@ import { z } from "zod"
 import { asyncHandler } from "../../middleware/asyncHandler.js"
 import { badRequest, conflict, notFound } from "../../lib/httpErrors.js"
 import { paginationSchema, requireAuth, requireRole, validateBody } from "../../middleware/auth.js"
-import { addDays } from "../../repositories/helpers.js"
 import type { Env } from "../../config/env.js"
 import type { Repositories, VehiculeStatut } from "../../repositories/types.js"
 
@@ -27,6 +26,14 @@ function isForeignKeyConstraintError(error: unknown): boolean {
     error.code === "ER_ROW_IS_REFERENCED_2"
   )
 }
+
+const STATUTS_SUPPRIMABLES: ReadonlySet<VehiculeStatut> = new Set([
+  "ENTREE_PARC",
+  "RETOUR_LOCATION",
+  "RETOUR_INTERNE",
+  "RETOUR_GARAGE",
+  "SORTIE_DEFINITIVE",
+])
 
 const statutSchema = z.object({
   statut: z.enum([
@@ -294,24 +301,21 @@ export function vehiculesRouter(repos: Repositories, env: Env): Router {
       const id = Number(req.params.id)
       const vehicule = await repos.vehicules.get(id)
       if (!vehicule) throw notFound("Véhicule introuvable")
-      const [locs, resas] = await Promise.all([
-        repos.locations.overlapping(id, "1900-01-01", "2100-12-31"),
-        repos.reservations.overlapping(id, "1900-01-01", "2100-12-31"),
-      ])
-      const aujourdHui = new Date().toISOString().slice(0, 10)
-      const resasEnCours = resas.filter((r) => addDays(r.dateDepart, r.dureeJours) >= aujourdHui)
-      if (locs.length > 0 || resasEnCours.length > 0) {
-        throw conflict("Véhicule lié à des locations ou réservations : suppression interdite")
+      if (!STATUTS_SUPPRIMABLES.has(vehicule.statut)) {
+        throw conflict(
+          "Suppression autorisée uniquement pour les véhicules en entrée au parc, de retour de location, de retour interne, de retour du garage ou sortis définitivement",
+        )
       }
+      let removed: boolean
       try {
-        const removed = await repos.vehicules.remove(id)
-        if (!removed) throw notFound("Véhicule introuvable")
-      } catch (error: unknown) {
+        removed = await repos.vehicules.remove(id)
+      } catch (error) {
         if (isForeignKeyConstraintError(error)) {
-          throw conflict("Véhicule lié à des données historiques : suppression interdite")
+          throw conflict("Ce véhicule est encore référencé dans l'historique et ne peut pas être supprimé")
         }
         throw error
       }
+      if (!removed) throw notFound("Véhicule introuvable")
       res.status(204).end()
     }),
   )

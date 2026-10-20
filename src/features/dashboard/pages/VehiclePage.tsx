@@ -68,6 +68,13 @@ const vehicleStatuses = [
   "SORTIE_DEFINITIVE",
   "RESERVATION",
 ]
+const deletableVehicleStatuses = new Set([
+  "ENTREE_PARC",
+  "RETOUR_LOCATION",
+  "RETOUR_INTERNE",
+  "RETOUR_GARAGE",
+  "SORTIE_DEFINITIVE",
+])
 const saleMotives = ["RENOUVELLEMENT_PARC", "COUT_ENTRETIEN_ELEVE", "FIN_CONTRAT", "ACCIDENT", "BESOIN_TRESORERIE", "AUTRE"]
 const saleConditions = ["BON", "MOYEN", "MAUVAIS", "ACCIDENTE", "EPAVE", "POUR_PIECES"]
 const saleChannels = ["PARTICULIER", "GARAGE_PROFESSIONNEL", "ENCHERES", "CLIENT_LOCATION", "APPEL_OFFRES", "AUTRE"]
@@ -341,8 +348,11 @@ export default function VehiclePage() {
                   )}
                   <button
                     className="action-delete"
-                    title="Supprimer"
+                    title={deletableVehicleStatuses.has(vehicle.statut)
+                      ? "Supprimer"
+                      : "Suppression interdite pour ce statut"}
                     aria-label="Supprimer"
+                    disabled={!deletableVehicleStatuses.has(vehicle.statut)}
                     onClick={() => setDeleting(vehicle)}
                   >
                     <Icon name="trash" size={16} />
@@ -377,6 +387,8 @@ export default function VehiclePage() {
             <h2>Supprimer ce véhicule ?</h2>
             <p>
               La suppression de « {deleting.immatriculation} » est définitive.
+              Elle sera refusée si des mouvements, locations, réservations,
+              ventes ou autres données historiques font référence à ce véhicule.
             </p>
             <div className="modal-actions">
               <button className="secondary" onClick={() => setDeleting(null)}>

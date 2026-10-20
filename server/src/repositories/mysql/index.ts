@@ -464,7 +464,7 @@ class MysqlReparationRepo implements ReparationRepo {
                            v.immatriculation AS vehicule
                       FROM reparation r
                       JOIN passage_garage p ON p.id_passage = r.id_passage
-                      JOIN vehicule v ON v.id_vehicule = p.id_vehicule`
+                      LEFT JOIN vehicule v ON v.id_vehicule = p.id_vehicule`
 
   async list(options?: ListOptions): Promise<Reparation[]> {
     await this.pool.query(
@@ -530,7 +530,7 @@ class MysqlPassageGarageRepo implements PassageGarageRepo {
                            v.immatriculation AS vehicule, g.nom AS garage,
                            p.id_vehicule_remplacement AS vehicule_remplacement_id
                       FROM passage_garage p
-                      JOIN vehicule v ON v.id_vehicule = p.id_vehicule
+                      LEFT JOIN vehicule v ON v.id_vehicule = p.id_vehicule
                       JOIN garage g ON g.id_garage = p.id_garage`
 
   async list(options?: ListOptions): Promise<PassageGarage[]> {
@@ -1053,10 +1053,11 @@ class MysqlLocationRepo implements LocationRepo {
                       l.id_client AS client_id, l.id_vehicule AS vehicule_id,
                       l.id_commercial AS commercial_id, l.type_location,
                       l.date_debut, l.date_fin_prevue, l.date_retour_reelle, l.montant_total, l.statut,
-                      c.nom AS client_nom, CONCAT(v.marque, ' ', v.modele) AS vehicule_nom
+                      c.nom AS client_nom,
+                      COALESCE(CONCAT(v.marque, ' ', v.modele), CONCAT('Véhicule #', l.id_vehicule)) AS vehicule_nom
                  FROM location l
                  JOIN client c ON c.id_client = l.id_client
-                 JOIN vehicule v ON v.id_vehicule = l.id_vehicule
+                 LEFT JOIN vehicule v ON v.id_vehicule = l.id_vehicule
                 ORDER BY l.id_location`
     const params: unknown[] = []
     if (limit) {
@@ -1261,10 +1262,11 @@ class MysqlLocationRepo implements LocationRepo {
     await this.refreshStatuses()
     const rows = await query<Row>(
       this.pool,
-      `SELECT l.*, c.nom AS client_nom, v.marque_modele AS vehicule_nom
+      `SELECT l.*, c.nom AS client_nom,
+              COALESCE(v.marque_modele, CONCAT('Véhicule #', l.id_vehicule)) AS vehicule_nom
          FROM location l
          JOIN client c ON c.id_client = l.id_client
-         JOIN vehicule v ON v.id_vehicule = l.id_vehicule
+         LEFT JOIN vehicule v ON v.id_vehicule = l.id_vehicule
         WHERE l.id_client = ?
         ORDER BY l.date_fin_prevue DESC`,
       [clientId],

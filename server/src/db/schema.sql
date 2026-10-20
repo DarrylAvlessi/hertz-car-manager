@@ -462,7 +462,7 @@ CREATE TABLE IF NOT EXISTS passage_garage (
   id_vehicule               INT NOT NULL,
   id_garage                 INT NOT NULL,
   id_vehicule_remplacement  INT NULL,
-  CONSTRAINT fk_pg_vehicule FOREIGN KEY (id_vehicule) REFERENCES vehicule(id_vehicule),
+  CONSTRAINT fk_pg_vehicule  FOREIGN KEY (id_vehicule) REFERENCES vehicule(id_vehicule),
   CONSTRAINT fk_pg_garage   FOREIGN KEY (id_garage)   REFERENCES garage(id_garage),
   CONSTRAINT fk_pg_remplace FOREIGN KEY (id_vehicule_remplacement) REFERENCES vehicule(id_vehicule),
   CONSTRAINT ck_pg_remplace CHECK (id_vehicule_remplacement IS NULL OR id_vehicule_remplacement <> id_vehicule),
