@@ -18,16 +18,24 @@ import type { TableModule } from "@/shared/data/types"
 
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 
+import ClientCommercialModal from "../components/ClientCommercialModal"
+
+type ManagedModule = "Clients" | "Commerciaux"
+
 export default function GenericTablePage({
   module,
 
   query,
+
+  refreshKey,
 
   onAdd,
 }: {
   module: TableModule
 
   query: string
+
+  refreshKey: number
 
   onAdd: () => void
 }) {
@@ -36,6 +44,14 @@ export default function GenericTablePage({
   const [error, setError] = useState<string | null>(null)
 
   const [page, setPage] = useState(1)
+
+  const [localRefreshKey, setLocalRefreshKey] = useState(0)
+
+  const [selectedRecord, setSelectedRecord] = useState<{
+    id: number
+
+    mode: "details" | "edit"
+  } | null>(null)
 
   const [detail, setDetail] = useState<{ row: string[], id: number } | null>(
     null,
@@ -62,12 +78,15 @@ export default function GenericTablePage({
     return () => {
       alive = false
     }
-  }, [module])
+  }, [module, refreshKey, localRefreshKey])
 
   const filtered = useMemo(
     () => (data ? filterTable(data, query) : null),
     [data, query],
   )
+
+  const managedModule: ManagedModule | null =
+    module === "Clients" || module === "Commerciaux" ? module : null
 
   const pageRows = filtered?.rows.slice(
     (page - 1) * TABLE_PAGE_SIZE,
@@ -177,16 +196,48 @@ export default function GenericTablePage({
                   >
                     <Icon name="eye" size={17} />
                   </button>
-                  <button title="Historique">
-                    <Icon name="history" size={17} />
-                  </button>
-                  <button
-                    className="action-edit"
-                    title="Modifier"
-                    aria-label="Modifier"
-                  >
-                    <Icon name="edit" size={16} />
-                  </button>
+                  {managedModule ? (
+                    <>
+                      <button
+                        type="button"
+                        title={
+                          managedModule === "Clients"
+                            ? "Historique client"
+                            : "Fiche de performance"
+                        }
+                        aria-label={
+                          managedModule === "Clients"
+                            ? "Historique client"
+                            : "Fiche de performance"
+                        }
+                        onClick={() =>
+                          setSelectedRecord({
+                            id: filtered.ids[(page - 1) * TABLE_PAGE_SIZE + i]!,
+                            mode: "details",
+                          })
+                        }
+                      >
+                        <Icon name="history" size={17} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Modifier"
+                        aria-label="Modifier"
+                        onClick={() =>
+                          setSelectedRecord({
+                            id: filtered.ids[(page - 1) * TABLE_PAGE_SIZE + i]!,
+                            mode: "edit",
+                          })
+                        }
+                      >
+                        <Icon name="edit" size={16} />
+                      </button>
+                    </>
+                  ) : (
+                    <button title="Historique">
+                      <Icon name="history" size={17} />
+                    </button>
+                  )}
                   <button
                     className="action-delete"
                     title="Supprimer"
@@ -214,6 +265,19 @@ export default function GenericTablePage({
             value: detail.row[index] ?? "—",
           }))}
           close={() => setDetail(null)}
+        />
+      )}
+      {selectedRecord && managedModule && (
+        <ClientCommercialModal
+          module={managedModule}
+          id={selectedRecord.id}
+          mode={selectedRecord.mode}
+          close={() => setSelectedRecord(null)}
+          onSaved={() => {
+            setSelectedRecord(null)
+
+            setLocalRefreshKey((current) => current + 1)
+          }}
         />
       )}
     </section>

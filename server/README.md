@@ -10,14 +10,48 @@ npm install
 npm run dev            # http://localhost:3101, driver=memory seedé
 ```
 
-## Brancher MySQL (plus tard)
+## Utiliser la base Hertz existante
+
+Pour utiliser la base XAMPP existante `gestion_location_hertz`, configurez
+`server/.env` avec `DB_DRIVER=mysql`, `DB_HOST`, `DB_PORT`, `DB_USER`,
+`DB_PASSWORD`, `DB_NAME=gestion_location_hertz` et `JWT_SECRET`, puis lancez
+`npm run dev --prefix server`.
+
+La base existante contient déjà ses données : ne lancez ni `db:migrate` ni
+`db:import-parc` dessus. `db:migrate` refuse désormais toute base qui contient
+déjà des tables, vues, procédures, triggers ou événements. Le dépôt MySQL prend
+en charge les listes, les fiches, les statistiques, la disponibilité et les
+écritures de clients, commerciaux, véhicules, réservations et locations.
+
+Pour une base déjà initialisée, appliquez séparément les migrations compatibles
+avec ses données. En particulier, la migration
+`src/db/migrations/001_allow_non_overlapping_rentals.sql` corrige le contrôle
+des locations successives sans chevauchement. Elle ne modifie aucune ligne de
+données. Exemple avec le client MySQL installé :
 
 ```bash
-docker compose up -d
-# renseigner server/.env : DB_DRIVER=mysql (+ identifiants si différents)
-npm run db:migrate      # schéma + seed idempotent
-npm run dev
+mysql -h 127.0.0.1 -u hertz -p gestion_location_hertz < src/db/migrations/001_allow_non_overlapping_rentals.sql
 ```
+
+Vérifiez le nom de la base et les paramètres de connexion avant d'exécuter une
+migration sur une base partagée.
+
+## Initialiser une nouvelle base vide
+
+Configurez `server/.env` avec `DB_DRIVER=mysql`, les identifiants MySQL et un
+`DB_NAME` autorisé, puis exécutez les commandes depuis `server/` :
+
+```bash
+npm run db:migrate       # schema.sql puis données de référence seed.sql
+npm run db:import-parc   # optionnel : agents, clients et parc initial
+```
+
+La migration ne fonctionne que sur une base sans aucun objet ; le seed est
+destiné à cette initialisation unique, pas à être rejoué. Le compte
+`admin@exemple.local` est créé avec un hash volontairement inutilisable :
+remplacez-le par un vrai hash avant toute connexion. L'import du parc vérifie
+que ses tables cibles sont vides, utilise une transaction et refuse les
+réimportations. N'exécutez pas directement le fichier SQL d'import.
 
 ## Scripts
 
@@ -27,7 +61,8 @@ npm run dev
 | `npm run build`   | compile vers `dist/` (tsc strict)                  |
 | `npm run start`   | lance `dist/index.js` (prod)                       |
 | `npm run typecheck` | vérification TypeScript sans émission            |
-| `npm run db:migrate` | exécute `schema.sql` + `seed.sql` et ajoute les références manquantes vers les véhicules; échoue si des historiques orphelins empêchent leur rétablissement (MySQL requis) |
+| `npm run db:migrate` | initialise (base vide) `schema.sql` + `seed.sql` et ajoute les références manquantes vers les véhicules ; échoue si des historiques orphelins empêchent leur rétablissement (MySQL requis) |
+| `npm run db:import-parc` | importe le jeu agents/parc une seule fois, avec contrôles et transaction |
 
 ## API (base `/api`, JWT Bearer sauf `/health`)
 
@@ -47,9 +82,13 @@ npm run dev
 | PUT     | `/vehicules/:id`                       | resp | modification                             |
 | DELETE  | `/vehicules/:id`                       | resp | 204 uniquement pour `ENTREE_PARC`, `RETOUR_LOCATION`, `RETOUR_INTERNE`, `RETOUR_GARAGE` ou `SORTIE_DEFINITIVE`, si aucune autre table ne le référence; sinon 409. |
 | GET     | `/clients`, `/clients/:id`, `/clients/:id/fiche` | resp | + fiche enrichie (nb locations, dernière opération) |
+| POST/PUT/DELETE | `/clients`, `/clients/:id`           | resp | création, modification, suppression protégée si historique |
 | GET     | `/commerciaux`, `/commerciaux/:id`     | resp | fiches avec CA + performance calculés    |
+| POST/PUT/DELETE | `/commerciaux`, `/commerciaux/:id`  | resp | création, modification, désactivation    |
 | GET     | `/locations?q&limit`, `/locations/:id` | resp | fiches avec noms client/véhicule         |
+| POST    | `/locations`                           | resp | création LCD/LLD avec contrôle de disponibilité |
 | GET     | `/reservations`, `/reservations/:id`   | resp | fiches avec noms client/commercial       |
+| POST    | `/reservations`                        | resp | création avec client, commercial et véhicule associés |
 | GET     | `/maintenances`, `/maintenances/:id`   | resp | passages garage                          |
 | GET     | `/mouvements?vehiculeId`               | resp | flux chronologiques                      |
 | GET     | `/stats/overview`, `/stats/monthly`    | resp | KPIs + série mensuelle                   |

@@ -7,13 +7,15 @@ import { ROUTES } from "@/app/routes"
 import { useAuth } from "@/features/auth/AuthContext"
 import AddModal from "./components/AddModal"
 import type { DashboardModule } from "@/shared/data/types"
-
 export interface DashboardOutletContext {
   query: string
+
+  refreshKey: number
+
   onAdd: () => void
+
   onSeeLocations: () => void
 }
-
 const NAV: Array<{
   label: DashboardModule
   to: string
@@ -71,6 +73,7 @@ export default function DashboardLayout() {
     return () => window.clearInterval(timer)
   }, [])
   const [modal, setModal] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
   const [fleetOpen, setFleetOpen] = useState(() =>
     FLEET_NAV.some((item) => item.to === window.location.pathname),
   )
@@ -102,10 +105,11 @@ export default function DashboardLayout() {
   const outletContext: DashboardOutletContext = useMemo(
     () => ({
       query,
+      refreshKey,
       onAdd: () => setModal(true),
       onSeeLocations: () => navigate(ROUTES.locations),
     }),
-    [query, navigate],
+    [query, refreshKey, navigate],
   )
 
   const handleLogout = () => {

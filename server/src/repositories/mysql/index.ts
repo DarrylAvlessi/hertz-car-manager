@@ -19,9 +19,12 @@ import type {
   ReparationRepo,
   Client,
   ClientFiche,
+  ClientInput,
   ClientRepo,
+  ClientUpdateInput,
   Commercial,
   CommercialFiche,
+  CommercialInput,
   CommercialRepo,
   ListOptions,
   Location,
@@ -43,6 +46,7 @@ import type {
   Repositories,
   Reservation,
   ReservationFiche,
+  ReservationInput,
   ReservationRepo,
   StatsRepo,
   Vehicule,
@@ -52,7 +56,7 @@ import type {
   VenteVehiculeInput,
   VenteVehiculeRepo,
 } from "../types.js"
-import { addDays, overlaps, performanceOf } from "../helpers.js"
+import { addDays, AvailabilityConflictError, overlaps, performanceOf } from "../helpers.js"
 
 type Row = Record<string, unknown>
 
@@ -61,6 +65,91 @@ const str = (v: unknown): string => String(v ?? "")
 const strNull = (v: unknown): string | null => (v === null || v === undefined ? null : String(v))
 const numNull = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v)
+
+async function assertVehicleAvailable(
+  connection: mysql.PoolConnection,
+  vehiculeId: number,
+  debut: string,
+  fin: string,
+): Promise<void> {
+  const vehicles = await query<Row>(
+    connection,
+    "SELECT statut FROM vehicule WHERE id_vehicule = ? FOR UPDATE",
+    [vehiculeId],
+  )
+  if (!vehicles[0]) throw new Error("Véhicule introuvable")
+  if (!["ENTREE_PARC", "RETOUR_LOCATION", "RETOUR_INTERNE", "RETOUR_GARAGE", "MISE_EN_LOCATION"].includes(
+    str(vehicles[0].statut),
+  )) {
+    throw new AvailabilityConflictError("Véhicule indisponible pour la location")
+  }
+
+  const garages = await query<Row>(
+    connection,
+    `SELECT id_passage, motif
+       FROM passage_garage
+      WHERE id_vehicule = ?
+        AND statut IN ('EN_ATTENTE', 'EN_COURS')
+        AND date_entree <= ?
+        AND COALESCE(date_sortie_reelle, date_sortie_prevue, '9999-12-31') >= ?
+      LIMIT 1`,
+    [vehiculeId, fin, debut],
+  )
+  if (garages[0]) {
+    throw new AvailabilityConflictError(
+      `Véhicule au garage sur la période${garages[0].motif ? ` (${str(garages[0].motif)})` : ""}`,
+    )
+  }
+
+  const locations = await query<Row>(
+    connection,
+    `SELECT id_location
+       FROM location
+      WHERE id_vehicule = ?
+        AND statut IN ('EN_COURS', 'EN_RETARD', 'EN_PROLONGATION')
+        AND DATE(date_debut) <= ?
+        AND DATE(GREATEST(COALESCE(date_retour_reelle, date_fin_prevue), CURRENT_DATE)) >= ?
+      LIMIT 1`,
+    [vehiculeId, fin, debut],
+  )
+  if (locations[0]) {
+    throw new AvailabilityConflictError("Véhicule déjà loué sur la période")
+  }
+
+  const reservations = await query<Row>(
+    connection,
+    `SELECT id_reservation
+       FROM reservation
+      WHERE id_vehicule = ?
+        AND statut IN ('EN_ATTENTE', 'CONFIRMEE')
+        AND date_debut_prevue <= ?
+        AND date_fin_prevue >= ?
+      LIMIT 1`,
+    [vehiculeId, fin, debut],
+  )
+  if (reservations[0]) {
+    throw new AvailabilityConflictError("Véhicule déjà réservé sur la période")
+  }
+}
+
+async function inTransaction<T>(
+  pool: mysql.Pool,
+  action: (connection: mysql.PoolConnection) => Promise<T>,
+): Promise<T> {
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const result = await action(connection)
+    await connection.commit()
+    return result
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}
+
 const MOVEMENT_MOTIFS = new Set([
   "LOCATION",
   "COURSE",
@@ -166,6 +255,22 @@ function locationDateTime(value: unknown): string {
   return str(value).replace(" ", "T").slice(0, 16)
 }
 
+function mapMaintenance(r: Row): Maintenance {
+  const statut = String(r.statut).toUpperCase()
+  if (statut !== "EN_ATTENTE" && statut !== "EN_COURS" && statut !== "TERMINEE") {
+    throw new Error(`Statut de passage garage MySQL inconnu : ${String(r.statut)}`)
+  }
+  return {
+    id: num(r.id),
+    vehiculeId: num(r.vehicule_id),
+    dateEntree: str(r.date_entree).slice(0, 10),
+    dateSortie: r.date_sortie ? str(r.date_sortie).slice(0, 10) : null,
+    motif: str(r.motif),
+    cout: num(r.cout),
+    remplacementId: numNull(r.remplacement_id),
+    statut: statut === "TERMINEE" ? "Terminée" : "En cours",
+  }
+}
 function mapProlongation(r: Row): Prolongation {
   return {
     id: num(r.id_prolongation),
@@ -233,7 +338,11 @@ function mapReservation(r: Row): Reservation {
   }
 }
 
-async function query<T>(pool: mysql.Pool, sql: string, params: unknown[] = []): Promise<T[]> {
+async function query<T>(
+  pool: mysql.Pool | mysql.PoolConnection,
+  sql: string,
+  params: unknown[] = [],
+): Promise<T[]> {
   const [rows] = await pool.query(sql, params)
   return rows as T[]
 }
@@ -922,6 +1031,52 @@ class MysqlClientRepo implements ClientRepo {
       derniereOperation: r.derniere ? str(r.derniere).slice(0, 10).split("-").reverse().join("/") : null,
     }))
   }
+
+  async create(input: ClientInput, adminId: number): Promise<Client> {
+    const [result] = await this.pool.query(
+      `INSERT INTO client
+         (nom, prenom, type_client, telephone, email, adresse, num_permis, id_administrateur)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.nom,
+        input.prenom ?? null,
+        input.type.toUpperCase(),
+        input.telephone,
+        input.email || null,
+        input.adresse || null,
+        input.numPermis || null,
+        adminId,
+      ],
+    )
+    const created = await this.get((result as mysql.ResultSetHeader).insertId)
+    if (!created) throw new Error("Client créé mais introuvable")
+    return created
+  }
+
+  async update(id: number, input: ClientUpdateInput): Promise<Client | null> {
+    await this.pool.query(
+      `UPDATE client
+          SET nom = ?, prenom = ?, type_client = ?, telephone = ?, email = ?,
+              adresse = ?, num_permis = ?
+        WHERE id_client = ?`,
+      [
+        input.nom,
+        input.prenom || null,
+        input.type.toUpperCase(),
+        input.telephone,
+        input.email || null,
+        input.adresse || null,
+        input.numPermis || null,
+        id,
+      ],
+    )
+    return this.get(id)
+  }
+
+  async remove(id: number): Promise<boolean> {
+    const [result] = await this.pool.query("DELETE FROM client WHERE id_client = ?", [id])
+    return (result as { affectedRows: number }).affectedRows > 0
+  }
 }
 
 class MysqlCommercialRepo implements CommercialRepo {
@@ -975,6 +1130,47 @@ class MysqlCommercialRepo implements CommercialRepo {
         performance: performanceOf(conclues),
       }
     })
+  }
+
+  async create(input: CommercialInput, adminId: number): Promise<Commercial> {
+    const [result] = await this.pool.query(
+      `INSERT INTO commercial
+         (nom, prenom, abreviation, telephone, email, actif, id_administrateur)
+       VALUES (?, ?, ?, ?, ?, TRUE, ?)`,
+      [
+        input.nom,
+        input.prenom ?? null,
+        input.abreviation ?? null,
+        input.telephone ?? null,
+        input.email ?? null,
+        adminId,
+      ],
+    )
+    const created = await this.get((result as mysql.ResultSetHeader).insertId)
+    if (!created) throw new Error("Commercial créé mais introuvable")
+    return created
+  }
+
+  async update(id: number, input: CommercialInput): Promise<Commercial | null> {
+    await this.pool.query(
+      `UPDATE commercial
+          SET nom = ?, prenom = ?, abreviation = ?, telephone = ?, email = ?
+        WHERE id_commercial = ?`,
+      [
+        input.nom,
+        input.prenom || null,
+        input.abreviation || null,
+        input.telephone || null,
+        input.email || null,
+        id,
+      ],
+    )
+    return this.get(id)
+  }
+
+  async deactivate(id: number): Promise<boolean> {
+    const [result] = await this.pool.query("UPDATE commercial SET actif = FALSE WHERE id_commercial = ?", [id])
+    return (result as { affectedRows: number }).affectedRows > 0
   }
 }
 
@@ -1074,9 +1270,13 @@ class MysqlLocationRepo implements LocationRepo {
     return rows[0] ? mapLocation(rows[0]) : null
   }
 
-  async create(input: LocationInput): Promise<Location> {
+  async create(input: LocationInput, adminId?: number): Promise<Location> {
     const dateDebut = sqlDateTime(input.dateDebut)
     const dateFin = sqlDateTime(input.dateFin)
+    const nowVal = localSqlDateTimeNow()
+    const statut = input.statut ?? "EN_COURS"
+    const statutEffectif = statut === "EN_COURS" && dateFin < nowVal ? "EN_RETARD" : statut
+    const dateRetour = statut === "TERMINEE" ? nowVal : null
     const connection = await this.pool.getConnection()
     let id = 0
     try {
@@ -1085,13 +1285,10 @@ class MysqlLocationRepo implements LocationRepo {
         `INSERT INTO location
         (numero_contrat, type_location, date_debut, date_fin_prevue, km_depart,
          montant_total, statut, date_retour_reelle, id_client, id_vehicule, id_commercial, id_administrateur)
-       SELECT ?, ?, ?, ?, v.kilometrage, ?,
-              CASE WHEN ? = 'EN_COURS' AND ? < ? THEN 'EN_RETARD' ELSE ? END,
-              CASE WHEN ? = 'TERMINEE' THEN ? ELSE NULL END,
-              ?, ?, COALESCE(?, (SELECT id_commercial FROM commercial ORDER BY id_commercial LIMIT 1)), a.id_administrateur
+       SELECT ?, ?, ?, ?, v.kilometrage, ?, ?, ?, ?, ?,
+              COALESCE(?, (SELECT id_commercial FROM commercial ORDER BY id_commercial LIMIT 1)),
+              COALESCE(?, (SELECT id_administrateur FROM administrateur ORDER BY id_administrateur LIMIT 1))
          FROM vehicule v
-         JOIN client c ON c.id_client = ?
-         JOIN administrateur a ON a.id_administrateur = (SELECT id_administrateur FROM administrateur ORDER BY id_administrateur LIMIT 1)
         WHERE v.id_vehicule = ?
         LIMIT 1`,
         [
@@ -1100,16 +1297,12 @@ class MysqlLocationRepo implements LocationRepo {
           dateDebut,
           dateFin,
           input.montant ?? 0,
-          input.statut ?? "EN_COURS",
-          dateFin,
-          localSqlDateTimeNow(),
-          input.statut ?? "EN_COURS",
-          input.statut ?? "EN_COURS",
-          localSqlDateTimeNow(),
+          statutEffectif,
+          dateRetour,
           input.clientId,
           input.vehiculeId,
           input.commercialId ?? null,
-          input.clientId,
+          adminId ?? null,
           input.vehiculeId,
         ],
       )
@@ -1349,57 +1542,73 @@ class MysqlReservationRepo implements ReservationRepo {
     )
     return rows.map(mapReservation)
   }
+
+  async create(input: ReservationInput): Promise<Reservation> {
+    const id = await inTransaction(this.pool, async (connection) => {
+      await assertVehicleAvailable(connection, input.vehiculeId, input.dateDepart, input.dateFin)
+      const [result] = await connection.query(
+        `INSERT INTO reservation
+           (date_debut_prevue, date_fin_prevue, id_client, id_vehicule, id_commercial)
+         VALUES (?, ?, ?, ?, ?)`,
+        [input.dateDepart, input.dateFin, input.clientId, input.vehiculeId, input.commercialId],
+      )
+      return (result as mysql.ResultSetHeader).insertId
+    })
+    const created = await this.get(id)
+    if (!created) throw new Error("Réservation créée introuvable")
+    return created
+  }
 }
 
 class MysqlMaintenanceRepo implements MaintenanceRepo {
   constructor(private pool: mysql.Pool) {}
 
   async list(options?: ListOptions): Promise<Maintenance[]> {
-    let sql = "SELECT * FROM maintenance"
+    let sql = `SELECT p.id_passage AS id, p.id_vehicule AS vehicule_id, p.date_entree,
+                      p.date_sortie_reelle AS date_sortie, p.motif,
+                      p.cout_total AS cout, p.id_vehicule_remplacement AS remplacement_id,
+                      p.statut
+                 FROM passage_garage p`
     const params: unknown[] = []
     if (options?.q) {
-      sql += " WHERE motif LIKE ? OR statut LIKE ?"
+      sql += " WHERE p.motif LIKE ? OR p.statut LIKE ?"
       const like = `%${options.q.trim()}%`
       params.push(like, like)
     }
-    sql += " ORDER BY date_entree DESC"
+    sql += " ORDER BY p.date_entree DESC"
     if (options?.limit) {
       sql += " LIMIT ?"
       params.push(options.limit)
     }
     const rows = await query<Row>(this.pool, sql, params)
-    return rows.map((r) => ({
-      id: num(r.id),
-      vehiculeId: num(r.vehicule_id),
-      dateEntree: str(r.date_entree).slice(0, 10),
-      dateSortie: r.date_sortie ? str(r.date_sortie).slice(0, 10) : null,
-      motif: str(r.motif),
-      cout: num(r.cout),
-      remplacementId: numNull(r.remplacement_id),
-      statut: r.statut as Maintenance["statut"],
-    }))
+    return rows.map(mapMaintenance)
   }
 
   async get(id: number): Promise<Maintenance | null> {
-    const rows = await query<Row>(this.pool, "SELECT * FROM maintenance WHERE id = ?", [id])
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT id_passage AS id, id_vehicule AS vehicule_id, date_entree,
+              date_sortie_reelle AS date_sortie, motif, cout_total AS cout,
+              id_vehicule_remplacement AS remplacement_id, statut
+         FROM passage_garage
+        WHERE id_passage = ?`,
+      [id],
+    )
     const r = rows[0]
     if (!r) return null
-    return {
-      id: num(r.id),
-      vehiculeId: num(r.vehicule_id),
-      dateEntree: str(r.date_entree).slice(0, 10),
-      dateSortie: r.date_sortie ? str(r.date_sortie).slice(0, 10) : null,
-      motif: str(r.motif),
-      cout: num(r.cout),
-      remplacementId: numNull(r.remplacement_id),
-      statut: r.statut as Maintenance["statut"],
-    }
+    return mapMaintenance(r)
   }
 
   async openForVehicule(vehiculeId: number): Promise<Maintenance | null> {
     const rows = await query<Row>(
       this.pool,
-      "SELECT * FROM maintenance WHERE vehicule_id = ? AND statut = 'En cours' LIMIT 1",
+      `SELECT id_passage AS id, id_vehicule AS vehicule_id, date_entree,
+              date_sortie_reelle AS date_sortie, motif, cout_total AS cout,
+              id_vehicule_remplacement AS remplacement_id
+         FROM passage_garage
+        WHERE id_vehicule = ? AND statut = 'EN_COURS'
+        ORDER BY date_entree DESC
+        LIMIT 1`,
       [vehiculeId],
     )
     const r = rows[0]
@@ -1412,8 +1621,25 @@ class MysqlMaintenanceRepo implements MaintenanceRepo {
       motif: str(r.motif),
       cout: num(r.cout),
       remplacementId: numNull(r.remplacement_id),
-      statut: r.statut as Maintenance["statut"],
+      statut: "En cours",
     }
+  }
+
+  async overlapping(vehiculeId: number, debut: string, fin: string): Promise<Maintenance[]> {
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT id_passage AS id, id_vehicule AS vehicule_id, date_entree,
+              date_sortie_reelle AS date_sortie, motif, cout_total AS cout,
+              id_vehicule_remplacement AS remplacement_id, statut
+         FROM passage_garage
+        WHERE id_vehicule = ?
+          AND statut IN ('EN_ATTENTE', 'EN_COURS')
+          AND date_entree <= ?
+          AND COALESCE(date_sortie_reelle, date_sortie_prevue, '9999-12-31') >= ?
+        ORDER BY date_entree`,
+      [vehiculeId, fin, debut],
+    )
+    return rows.map(mapMaintenance)
   }
 }
 

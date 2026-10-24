@@ -1,19 +1,44 @@
--- Schéma métier Hertz Bénin issu de la base de référence.
--- Les triggers, vues et procédures sont gérés séparément du schéma de migration.
-SET NAMES utf8mb4;
+-- =====================================================================================
+--  BASE DE DONNÉES : GESTION DES ACTIVITÉS DE LOCATION DE VÉHICULES (HERTZ BÉNIN)
+--  SGBD cible : MySQL 8.0+ / MariaDB 10.5+   (InnoDB, utf8mb4)      Version 2
+--
+--  Conçue à partir :
+--    1. des fonctionnalités du cahier des charges (clients, commerciaux, réservations,
+--       locations courte/longue durée, mouvements, statistiques, documents, garage) ;
+--    2. des fichiers historiques Hertz :
+--         CSV  Journal des mouvements (Journal) -> mouvement_vehicule, lieu, conducteur
+--         CSV  Journal des mouvements (RESA)    -> reservation, client, suivi_reservation
+--         CSV  Journal des mouvements (Affaires perdues) -> affaire_perdue, relance
+--         CSV  CONTRAVENTIONS ANATT             -> contravention, type_contravention
+--         XLSX Liste des agents de vente        -> agence, commercial
+--         XLSX Location (suivi mensuel)         -> location, facture, ligne_facture, paiement,
+--                                                  prolongation_location, option_location
+--         XLSX PARC_LCD (Liste globale + LCD)   -> vehicule, modele_vehicule, centre, sinistre
+--  Devise par défaut : XOF (franc CFA). Dates au format SQL (AAAA-MM-JJ).
+--
+--  CONTENU
+--    1. Tables de référence          7. Maintenance (garage, réparations, sinistres)
+--    2. Acteurs                      8. Journal des mouvements
+--    3. Parc de véhicules            9. Contraventions ANATT
+--    4. Réservations, affaires      10. Documents et rapports
+--       perdues                     11. Triggers (règles automatiques)
+--    5. Locations (courte/longue)   12. Vues (dont indicateurs KPI)   13. Procédures
+--    6. Facturation et paiements
+-- =====================================================================================
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
-
-CREATE DATABASE IF NOT EXISTS hertz_benin
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE hertz_benin;
 
 -- =====================================================================================
 -- 1. TABLES DE RÉFÉRENCE
 -- =====================================================================================
 
 -- Agences (fichier « Liste des agents de vente » : Agence principale APS, Aéroport AEP, Golden Tulip AGT)
+SET FOREIGN_KEY_CHECKS = 0;
+CREATE DATABASE IF NOT EXISTS hertz_benin
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE hertz_benin;
+
 CREATE TABLE IF NOT EXISTS agence (
   id_agence  INT AUTO_INCREMENT PRIMARY KEY,
   code       VARCHAR(10)  NOT NULL UNIQUE,
@@ -462,7 +487,7 @@ CREATE TABLE IF NOT EXISTS passage_garage (
   id_vehicule               INT NOT NULL,
   id_garage                 INT NOT NULL,
   id_vehicule_remplacement  INT NULL,
-  CONSTRAINT fk_pg_vehicule  FOREIGN KEY (id_vehicule) REFERENCES vehicule(id_vehicule),
+  CONSTRAINT fk_pg_vehicule FOREIGN KEY (id_vehicule) REFERENCES vehicule(id_vehicule),
   CONSTRAINT fk_pg_garage   FOREIGN KEY (id_garage)   REFERENCES garage(id_garage),
   CONSTRAINT fk_pg_remplace FOREIGN KEY (id_vehicule_remplacement) REFERENCES vehicule(id_vehicule),
   CONSTRAINT ck_pg_remplace CHECK (id_vehicule_remplacement IS NULL OR id_vehicule_remplacement <> id_vehicule),
@@ -547,7 +572,6 @@ CREATE TABLE IF NOT EXISTS mouvement_vehicule (
   INDEX idx_mvt_location (id_location),
   INDEX idx_mvt_passage (id_passage)
 ) ENGINE=InnoDB;
-
 CREATE TABLE IF NOT EXISTS vente_vehicule (
   id_vente              INT AUTO_INCREMENT PRIMARY KEY,
   numero_vente          VARCHAR(30) NOT NULL UNIQUE,
@@ -582,6 +606,7 @@ CREATE TABLE IF NOT EXISTS vente_vehicule (
   INDEX idx_vente_vehicule_date (id_vehicule, date_vente),
   INDEX idx_vente_statut (statut)
 ) ENGINE=InnoDB;
+
 
 -- =====================================================================================
 -- 9. CONTRAVENTIONS ROUTIÈRES (ANATT)
@@ -677,3 +702,947 @@ CREATE TABLE IF NOT EXISTS document (
 ) ENGINE=InnoDB;
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- =====================================================================================
+-- 11. TRIGGERS : RÈGLES MÉTIER AUTOMATIQUES
+-- =====================================================================================
+-- Pour importer un HISTORIQUE (ex. les anciens CSV) sans déclencher les contrôles de statut
+-- ni les mouvements automatiques :   SET @import_historique = 1;   ... imports ...
+-- puis :  SET @import_historique = 0;  CALL sp_recalculer_statuts_vehicules();
+
+DELIMITER //
+
+-- ---- Réservations : agence par défaut + historisation des changements de statut ----------
+CREATE TRIGGER trg_reservation_bi BEFORE INSERT ON reservation FOR EACH ROW
+BEGIN
+  IF NEW.id_agence IS NULL THEN
+    SET NEW.id_agence = (SELECT id_agence FROM commercial WHERE id_commercial = NEW.id_commercial);
+  END IF;
+END//
+
+CREATE TRIGGER trg_reservation_ai AFTER INSERT ON reservation FOR EACH ROW
+BEGIN
+  INSERT INTO suivi_reservation (ancien_statut, nouveau_statut, id_reservation, commentaire)
+  VALUES (NULL, NEW.statut, NEW.id_reservation, 'Création de la réservation');
+END//
+
+CREATE TRIGGER trg_reservation_au AFTER UPDATE ON reservation FOR EACH ROW
+BEGIN
+  IF OLD.statut <> NEW.statut THEN
+    INSERT INTO suivi_reservation (ancien_statut, nouveau_statut, id_reservation)
+    VALUES (OLD.statut, NEW.statut, NEW.id_reservation);
+  END IF;
+END//
+
+-- ---- Locations : cohérence avec la réservation, anti-chevauchement -------------------
+CREATE TRIGGER trg_location_bi BEFORE INSERT ON location FOR EACH ROW
+BEGIN
+  DECLARE v_client INT; DECLARE v_vehicule INT;
+  IF NEW.date_retour_reelle IS NOT NULL THEN
+    SET NEW.statut = 'TERMINEE';
+  END IF;
+  IF NEW.id_agence IS NULL THEN
+    SET NEW.id_agence = (SELECT id_agence FROM commercial WHERE id_commercial = NEW.id_commercial);
+  END IF;
+  IF NEW.id_reservation IS NOT NULL THEN
+    SELECT id_client, id_vehicule INTO v_client, v_vehicule
+      FROM reservation WHERE id_reservation = NEW.id_reservation;
+    IF v_client <> NEW.id_client OR v_vehicule <> NEW.id_vehicule THEN
+      SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Location incohérente : client ou véhicule différent de la réservation.';
+    END IF;
+  END IF;
+  IF COALESCE(@import_historique, 0) = 0 THEN
+    IF EXISTS (SELECT 1 FROM location l
+                WHERE l.id_vehicule = NEW.id_vehicule
+                  AND l.statut IN ('EN_COURS','EN_RETARD','EN_PROLONGATION')
+                  AND l.date_debut < NEW.date_fin_prevue
+                  AND COALESCE(l.date_retour_reelle, l.date_fin_prevue) > NEW.date_debut) THEN
+      SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Ce véhicule est déjà en location sur cette période.';
+    END IF;
+  END IF;
+END//
+
+CREATE TRIGGER trg_location_ai AFTER INSERT ON location FOR EACH ROW
+BEGIN
+  IF NEW.id_reservation IS NOT NULL THEN
+    UPDATE reservation SET statut = 'TRANSFORMEE_EN_LOCATION' WHERE id_reservation = NEW.id_reservation;
+  END IF;
+  IF COALESCE(@import_historique, 0) = 0 THEN
+    INSERT INTO mouvement_vehicule (type_mouvement, motif, date_mouvement, date_retour_prevue, kilometrage,
+                                    id_vehicule, id_lieu, id_conducteur, id_commercial, id_validateur, id_location)
+    VALUES ('MISE_EN_LOCATION', 'LOCATION', NEW.date_debut, NEW.date_fin_prevue, NEW.km_depart,
+            NEW.id_vehicule, NEW.id_lieu_depart, NEW.id_conducteur, NEW.id_commercial, NEW.id_commercial, NEW.id_location);
+  END IF;
+END//
+
+CREATE TRIGGER trg_location_bu BEFORE UPDATE ON location FOR EACH ROW
+BEGIN
+  IF OLD.date_retour_reelle IS NULL AND NEW.date_retour_reelle IS NOT NULL THEN
+    SET NEW.statut = 'TERMINEE';
+  END IF;
+END//
+
+CREATE TRIGGER trg_location_au AFTER UPDATE ON location FOR EACH ROW
+BEGIN
+  DECLARE v_depart INT;
+  IF OLD.date_retour_reelle IS NULL AND NEW.date_retour_reelle IS NOT NULL
+     AND COALESCE(@import_historique, 0) = 0 THEN
+    SELECT id_mouvement INTO v_depart FROM mouvement_vehicule
+     WHERE id_location = NEW.id_location AND type_mouvement = 'MISE_EN_LOCATION' LIMIT 1;
+    INSERT INTO mouvement_vehicule (type_mouvement, motif, date_mouvement, kilometrage, id_vehicule, id_lieu,
+                                    id_conducteur, id_commercial, id_mouvement_depart, id_location)
+    VALUES ('RETOUR_LOCATION', 'LOCATION', NEW.date_retour_reelle, NEW.km_retour, NEW.id_vehicule,
+            COALESCE(NEW.id_lieu_retour, NEW.id_lieu_depart), NEW.id_conducteur, NEW.id_commercial, v_depart, NEW.id_location);
+  END IF;
+END//
+
+-- ---- Sous-types de location : le type doit correspondre -------------------------------
+CREATE TRIGGER trg_lcd_bi BEFORE INSERT ON location_courte_duree FOR EACH ROW
+BEGIN
+  IF (SELECT type_location FROM location WHERE id_location = NEW.id_location) <> 'COURTE_DUREE' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cette location n''est pas de type COURTE_DUREE.';
+  END IF;
+END//
+
+CREATE TRIGGER trg_lld_bi BEFORE INSERT ON location_longue_duree FOR EACH ROW
+BEGIN
+  IF (SELECT type_location FROM location WHERE id_location = NEW.id_location) <> 'LONGUE_DUREE' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Cette location n''est pas de type LONGUE_DUREE.';
+  END IF;
+END//
+
+-- ---- Mouvements : contrôles puis mise à jour de la situation du véhicule -------------
+CREATE TRIGGER trg_mouvement_bi BEFORE INSERT ON mouvement_vehicule FOR EACH ROW
+BEGIN
+  DECLARE v_statut VARCHAR(20);
+  DECLARE v_type_dep VARCHAR(30); DECLARE v_veh_dep INT; DECLARE v_km_dep INT; DECLARE v_date_dep DATETIME;
+  IF COALESCE(@import_historique, 0) = 0 THEN
+    IF NEW.type_mouvement IN ('MISE_EN_LOCATION','SORTIE_INTERNE','ENVOI_GARAGE','SORTIE_DEFINITIVE') THEN
+      SELECT statut INTO v_statut FROM vehicule WHERE id_vehicule = NEW.id_vehicule;
+      IF v_statut NOT IN ('ENTREE_PARC','RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE')
+         AND NOT (NEW.type_mouvement = 'ENVOI_GARAGE' AND EXISTS (SELECT 1 FROM sinistre s
+                        WHERE s.id_vehicule = NEW.id_vehicule AND s.immobilisant = 1 AND s.statut <> 'CLOS'))
+         AND NOT (
+           NEW.type_mouvement = 'MISE_EN_LOCATION'
+           AND v_statut = 'MISE_EN_LOCATION'
+           AND NEW.id_location IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+               FROM location nouvelle
+               JOIN location existante
+                 ON existante.id_vehicule = nouvelle.id_vehicule
+                AND existante.id_location <> nouvelle.id_location
+              WHERE nouvelle.id_location = NEW.id_location
+                AND existante.statut IN ('EN_COURS', 'EN_RETARD')
+                AND existante.date_debut < nouvelle.date_fin_prevue
+                AND COALESCE(existante.date_retour_reelle, existante.date_fin_prevue) > nouvelle.date_debut
+           )
+         ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Mouvement impossible : le véhicule n''est pas disponible.';
+      END IF;
+    ELSEIF NEW.type_mouvement IN ('RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE') THEN
+      IF NEW.id_mouvement_depart IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Un retour doit référencer le départ correspondant.';
+      END IF;
+      SELECT type_mouvement, id_vehicule, kilometrage, date_mouvement
+        INTO v_type_dep, v_veh_dep, v_km_dep, v_date_dep
+        FROM mouvement_vehicule WHERE id_mouvement = NEW.id_mouvement_depart;
+      IF v_veh_dep <> NEW.id_vehicule THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Le retour ne concerne pas le même véhicule que le départ.';
+      END IF;
+      IF NOT ((NEW.type_mouvement = 'RETOUR_LOCATION' AND v_type_dep = 'MISE_EN_LOCATION')
+           OR (NEW.type_mouvement = 'RETOUR_INTERNE'  AND v_type_dep = 'SORTIE_INTERNE')
+           OR (NEW.type_mouvement = 'RETOUR_GARAGE'   AND v_type_dep = 'ENVOI_GARAGE')) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Le type de retour ne correspond pas au type de départ.';
+      END IF;
+      IF NEW.date_mouvement < v_date_dep THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La date de retour est antérieure à la date de départ.';
+      END IF;
+      IF NEW.kilometrage IS NOT NULL AND v_km_dep IS NOT NULL AND NEW.kilometrage < v_km_dep THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Le kilométrage de retour est inférieur au kilométrage de départ.';
+      END IF;
+    END IF;
+  END IF;
+END//
+
+CREATE TRIGGER trg_mouvement_ai AFTER INSERT ON mouvement_vehicule FOR EACH ROW
+BEGIN
+  IF COALESCE(@import_historique, 0) = 0 THEN
+    UPDATE vehicule
+       SET statut = NEW.type_mouvement,   -- le statut du vÃ©hicule reflÃ¨te son dernier mouvement
+           kilometrage = GREATEST(kilometrage, COALESCE(NEW.kilometrage, 0)),
+           date_sortie_parc = CASE WHEN NEW.type_mouvement = 'SORTIE_DEFINITIVE'
+                                   THEN DATE(NEW.date_mouvement) ELSE date_sortie_parc END
+     WHERE id_vehicule = NEW.id_vehicule;
+  END IF;
+END//
+
+-- ---- Facturation / paiements -----------------------------------------------------------
+-- Le montant HT d'une facture = somme de ses lignes
+CREATE TRIGGER trg_ligne_facture_ai AFTER INSERT ON ligne_facture FOR EACH ROW
+BEGIN
+  UPDATE facture SET montant_ht = (SELECT COALESCE(SUM(montant_ht), 0) FROM ligne_facture WHERE id_facture = NEW.id_facture)
+   WHERE id_facture = NEW.id_facture;
+  IF NEW.id_location IS NOT NULL THEN
+    UPDATE reservation SET statut_facturation = 'FACTURE_EMISE_PAIEMENT_EN_ATTENTE'
+     WHERE id_reservation = (SELECT id_reservation FROM location WHERE id_location = NEW.id_location)
+       AND statut_facturation IN ('NON_FACTUREE','EN_ATTENTE_BON_COMMANDE');
+  END IF;
+END//
+
+CREATE TRIGGER trg_ligne_facture_au AFTER UPDATE ON ligne_facture FOR EACH ROW
+BEGIN
+  UPDATE facture SET montant_ht = (SELECT COALESCE(SUM(montant_ht), 0) FROM ligne_facture WHERE id_facture = NEW.id_facture)
+   WHERE id_facture = NEW.id_facture;
+  IF OLD.id_facture <> NEW.id_facture THEN
+    UPDATE facture SET montant_ht = (SELECT COALESCE(SUM(montant_ht), 0) FROM ligne_facture WHERE id_facture = OLD.id_facture)
+     WHERE id_facture = OLD.id_facture;
+  END IF;
+END//
+
+CREATE TRIGGER trg_ligne_facture_ad AFTER DELETE ON ligne_facture FOR EACH ROW
+BEGIN
+  UPDATE facture SET montant_ht = (SELECT COALESCE(SUM(montant_ht), 0) FROM ligne_facture WHERE id_facture = OLD.id_facture)
+   WHERE id_facture = OLD.id_facture;
+END//
+
+-- Quand une facture change de statut de paiement, ses locations et réservations suivent
+CREATE TRIGGER trg_facture_au AFTER UPDATE ON facture FOR EACH ROW
+BEGIN
+  IF OLD.statut_paiement <> NEW.statut_paiement THEN
+    UPDATE location l JOIN ligne_facture lf ON lf.id_location = l.id_location
+       SET l.statut_paiement = NEW.statut_paiement
+     WHERE lf.id_facture = NEW.id_facture;
+    IF NEW.statut_paiement = 'PAYEE' THEN
+      UPDATE reservation r
+        JOIN location l ON l.id_reservation = r.id_reservation
+        JOIN ligne_facture lf ON lf.id_location = l.id_location
+         SET r.statut_facturation = 'PAIEMENT_EFFECTUE', r.statut_paiement = 'PAYEE'
+       WHERE lf.id_facture = NEW.id_facture;
+    END IF;
+  END IF;
+END//
+
+CREATE TRIGGER trg_paiement_ai AFTER INSERT ON paiement FOR EACH ROW
+BEGIN
+  DECLARE v_total DECIMAL(14,2); DECLARE v_du DECIMAL(14,2);
+  IF NEW.id_facture IS NOT NULL THEN
+    SELECT COALESCE(SUM(montant), 0) INTO v_total FROM paiement WHERE id_facture = NEW.id_facture;
+    SELECT montant_ttc INTO v_du FROM facture WHERE id_facture = NEW.id_facture;
+    UPDATE facture
+       SET statut_paiement = CASE WHEN v_total >= v_du THEN 'PAYEE' WHEN v_total > 0 THEN 'PARTIELLE' ELSE 'NON_PAYEE' END
+     WHERE id_facture = NEW.id_facture;
+  END IF;
+  IF NEW.id_reservation IS NOT NULL THEN
+    UPDATE reservation SET statut_paiement = 'PAYEE' WHERE id_reservation = NEW.id_reservation;
+  END IF;
+  IF NEW.id_location IS NOT NULL THEN
+    SELECT COALESCE(SUM(montant), 0) INTO v_total FROM paiement WHERE id_location = NEW.id_location;
+    SELECT montant_total INTO v_du FROM location WHERE id_location = NEW.id_location;
+    UPDATE location SET statut_paiement = CASE WHEN v_total >= v_du THEN 'PAYEE' ELSE 'PARTIELLE' END
+     WHERE id_location = NEW.id_location;
+  END IF;
+END//
+
+-- ---- Prolongations de location ---------------------------------------------------------------
+CREATE TRIGGER trg_prolongation_bi BEFORE INSERT ON prolongation_location FOR EACH ROW
+BEGIN
+  DECLARE v_fin DATETIME; DECLARE v_veh INT; DECLARE v_statut VARCHAR(15); DECLARE v_rendue DATETIME;
+  SELECT date_fin_prevue, id_vehicule, statut, date_retour_reelle INTO v_fin, v_veh, v_statut, v_rendue
+    FROM location WHERE id_location = NEW.id_location;
+  IF v_statut = 'TERMINEE' OR v_rendue IS NOT NULL THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Impossible de prolonger une location terminée.';
+  END IF;
+  IF NEW.nouvelle_date_fin <= v_fin THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La nouvelle date de fin doit être postérieure à la date de fin actuelle.';
+  END IF;
+  IF COALESCE(@import_historique, 0) = 0 AND EXISTS (
+       SELECT 1 FROM location l
+        WHERE l.id_vehicule = v_veh AND l.id_location <> NEW.id_location
+          AND l.statut IN ('EN_COURS','EN_RETARD','EN_PROLONGATION')
+          AND l.date_debut < NEW.nouvelle_date_fin
+          AND COALESCE(l.date_retour_reelle, l.date_fin_prevue) > v_fin) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Prolongation impossible : le véhicule est déjà engagé sur cette période.';
+  END IF;
+  SET NEW.ancienne_date_fin = v_fin;
+END//
+
+CREATE TRIGGER trg_prolongation_ai AFTER INSERT ON prolongation_location FOR EACH ROW
+BEGIN
+  UPDATE location
+     SET date_fin_prevue = NEW.nouvelle_date_fin,
+         montant_total   = montant_total + NEW.montant_supplementaire,
+         statut          = CASE WHEN statut = 'EN_RETARD' AND NEW.nouvelle_date_fin >= NOW() THEN 'EN_COURS' ELSE statut END
+   WHERE id_location = NEW.id_location;
+END//
+
+-- ---- Sinistres : immobilisation automatique du véhicule ----------------------------------------
+CREATE TRIGGER trg_sinistre_bu BEFORE UPDATE ON sinistre FOR EACH ROW
+BEGIN
+  IF NEW.statut = 'CLOS' AND NEW.date_cloture IS NULL THEN
+    SET NEW.date_cloture = CURRENT_DATE;
+  END IF;
+END//
+
+CREATE TRIGGER trg_sinistre_ai AFTER INSERT ON sinistre FOR EACH ROW
+BEGIN
+  IF NEW.immobilisant = 1 AND NEW.statut <> 'CLOS' AND COALESCE(@import_historique, 0) = 0 THEN
+    UPDATE vehicule SET statut = 'ENVOI_GARAGE'
+     WHERE id_vehicule = NEW.id_vehicule AND statut IN ('ENTREE_PARC','RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE');
+  END IF;
+END//
+
+CREATE TRIGGER trg_sinistre_au AFTER UPDATE ON sinistre FOR EACH ROW
+BEGIN
+  IF NEW.statut = 'CLOS' AND OLD.statut <> 'CLOS' AND COALESCE(@import_historique, 0) = 0 THEN
+    IF NOT EXISTS (SELECT 1 FROM sinistre s WHERE s.id_vehicule = NEW.id_vehicule
+                    AND s.immobilisant = 1 AND s.statut <> 'CLOS') THEN
+      UPDATE vehicule SET statut = 'RETOUR_GARAGE' WHERE id_vehicule = NEW.id_vehicule AND statut = 'ENVOI_GARAGE';
+    END IF;
+  END IF;
+END//
+
+-- ---- Maintenance : mouvements automatiques + total des réparations ---------------------
+CREATE TRIGGER trg_passage_ai AFTER INSERT ON passage_garage FOR EACH ROW
+BEGIN
+  IF COALESCE(@import_historique, 0) = 0 THEN
+    INSERT INTO mouvement_vehicule (type_mouvement, motif, date_mouvement, kilometrage, id_vehicule, id_passage, observation)
+    VALUES ('ENVOI_GARAGE',
+            CASE NEW.type_passage WHEN 'REVISION' THEN 'REVISION' WHEN 'ENTRETIEN' THEN 'REVISION'
+                                  WHEN 'VISITE_TECHNIQUE' THEN 'VISITE_TECHNIQUE' ELSE 'GARAGE' END,
+            CAST(NEW.date_entree AS DATETIME), NEW.km_entree, NEW.id_vehicule, NEW.id_passage, NEW.motif);
+  END IF;
+END//
+
+CREATE TRIGGER trg_passage_bu BEFORE UPDATE ON passage_garage FOR EACH ROW
+BEGIN
+  IF OLD.date_sortie_reelle IS NULL AND NEW.date_sortie_reelle IS NOT NULL THEN
+    SET NEW.statut = 'TERMINEE';
+  END IF;
+END//
+
+CREATE TRIGGER trg_passage_au AFTER UPDATE ON passage_garage FOR EACH ROW
+BEGIN
+  DECLARE v_depart INT;
+  IF OLD.date_sortie_reelle IS NULL AND NEW.date_sortie_reelle IS NOT NULL
+     AND COALESCE(@import_historique, 0) = 0 THEN
+    SELECT id_mouvement INTO v_depart FROM mouvement_vehicule
+     WHERE id_passage = NEW.id_passage AND type_mouvement = 'ENVOI_GARAGE' LIMIT 1;
+    INSERT INTO mouvement_vehicule (type_mouvement, motif, date_mouvement, id_vehicule, id_passage, id_mouvement_depart)
+    VALUES ('RETOUR_GARAGE', 'GARAGE', CAST(NEW.date_sortie_reelle AS DATETIME), NEW.id_vehicule, NEW.id_passage, v_depart);
+    -- la réparation est terminée : les sinistres rattachés à ce passage sont clos (fin de l'immobilisation)
+    UPDATE sinistre SET statut = 'CLOS', date_cloture = NEW.date_sortie_reelle
+     WHERE id_passage = NEW.id_passage AND statut <> 'CLOS';
+  END IF;
+END//
+
+CREATE TRIGGER trg_reparation_ai AFTER INSERT ON reparation FOR EACH ROW
+BEGIN
+  UPDATE passage_garage SET cout_total = (SELECT COALESCE(SUM(cout), 0) FROM reparation WHERE id_passage = NEW.id_passage)
+   WHERE id_passage = NEW.id_passage;
+END//
+
+CREATE TRIGGER trg_reparation_au AFTER UPDATE ON reparation FOR EACH ROW
+BEGIN
+  UPDATE passage_garage SET cout_total = (SELECT COALESCE(SUM(cout), 0) FROM reparation WHERE id_passage = NEW.id_passage)
+   WHERE id_passage = NEW.id_passage;
+  IF OLD.id_passage <> NEW.id_passage THEN
+    UPDATE passage_garage SET cout_total = (SELECT COALESCE(SUM(cout), 0) FROM reparation WHERE id_passage = OLD.id_passage)
+     WHERE id_passage = OLD.id_passage;
+  END IF;
+END//
+
+CREATE TRIGGER trg_reparation_ad AFTER DELETE ON reparation FOR EACH ROW
+BEGIN
+  UPDATE passage_garage SET cout_total = (SELECT COALESCE(SUM(cout), 0) FROM reparation WHERE id_passage = OLD.id_passage)
+   WHERE id_passage = OLD.id_passage;
+END//
+
+-- ---- Contraventions : rattachement automatique à la location / au client -------------
+-- À l'enregistrement, on retrouve la location (et donc le client, le commercial, le conducteur)
+-- qui avait le véhicule à la date de l'infraction, ainsi que la sortie correspondante au journal.
+CREATE TRIGGER trg_contravention_bi BEFORE INSERT ON contravention FOR EACH ROW
+BEGIN
+  DECLARE v_loc INT DEFAULT NULL; DECLARE v_cli INT DEFAULT NULL;
+  DECLARE v_com INT DEFAULT NULL; DECLARE v_cond INT DEFAULT NULL; DECLARE v_mvt INT DEFAULT NULL;
+  IF NEW.id_location IS NULL THEN
+    SELECT l.id_location, l.id_client, l.id_commercial, l.id_conducteur
+      INTO v_loc, v_cli, v_com, v_cond
+      FROM location l
+     WHERE l.id_vehicule = NEW.id_vehicule
+       AND NEW.date_infraction >= DATE(l.date_debut)
+       AND NEW.date_infraction <= DATE(COALESCE(l.date_retour_reelle, l.date_fin_prevue))
+     ORDER BY l.date_debut DESC LIMIT 1;
+    SET NEW.id_location = v_loc;
+    IF NEW.id_client      IS NULL THEN SET NEW.id_client      = v_cli;  END IF;
+    IF NEW.id_commercial  IS NULL THEN SET NEW.id_commercial  = v_com;  END IF;
+    IF NEW.id_conducteur  IS NULL THEN SET NEW.id_conducteur  = v_cond; END IF;
+  END IF;
+  IF NEW.id_mouvement IS NULL THEN
+    SELECT d.id_mouvement INTO v_mvt
+      FROM mouvement_vehicule d
+      LEFT JOIN mouvement_vehicule r ON r.id_mouvement_depart = d.id_mouvement
+     WHERE d.id_vehicule = NEW.id_vehicule
+       AND d.type_mouvement IN ('MISE_EN_LOCATION','SORTIE_INTERNE','ENVOI_GARAGE')
+       AND DATE(d.date_mouvement) <= NEW.date_infraction
+       AND (r.id_mouvement IS NULL OR DATE(r.date_mouvement) >= NEW.date_infraction)
+     ORDER BY d.date_mouvement DESC LIMIT 1;
+    SET NEW.id_mouvement = v_mvt;
+  END IF;
+END//
+
+DELIMITER ;
+
+-- =====================================================================================
+-- 12. VUES : SITUATION, HISTORIQUES, STATISTIQUES
+-- =====================================================================================
+
+-- ---- Reproduit l'onglet « Journal » du fichier Excel ---------------------------------------
+CREATE OR REPLACE VIEW v_journal_mouvements AS
+SELECT d.id_mouvement                                   AS numero,
+       v.immatriculation,
+       CONCAT(v.marque, ' ', v.modele)                  AS vehicule,
+       DATE(d.date_mouvement)                           AS date_depart,
+       TIME(d.date_mouvement)                           AS heure_depart,
+       ld.libelle                                       AS adresse_depart,
+       CONCAT_WS(' ', cd.prenom, cd.nom)                AS utilisateur_conducteur,
+       d.motif,
+       CONCAT_WS(' ', ca.prenom, ca.nom)                AS agent_de_vente,
+       d.kilometrage                                    AS km_depart,
+       d.date_retour_prevue                             AS retour_prevu,
+       DATE(r.date_mouvement)                           AS date_retour,
+       TIME(r.date_mouvement)                           AS heure_retour,
+       CASE WHEN r.id_mouvement IS NULL THEN NULL
+            ELSE DATEDIFF(r.date_mouvement, d.date_mouvement) END AS duree_jours,
+       r.kilometrage                                    AS km_retour,
+       CASE WHEN r.kilometrage IS NULL OR d.kilometrage IS NULL THEN NULL
+            ELSE r.kilometrage - d.kilometrage END      AS km_parcourus,
+       lr.libelle                                       AS adresse_retour,
+       CONCAT_WS(' ', cv.prenom, cv.nom)                AS validateur,
+       CASE r.contravention_constatee WHEN 1 THEN 'Oui' WHEN 0 THEN 'Non' ELSE NULL END AS contraventions_commises,
+       (SELECT GROUP_CONCAT(DISTINCT IF(c.statut_paiement = 'PAYEE', 'Payée', 'Non payée'))
+          FROM contravention c WHERE c.id_mouvement = d.id_mouvement) AS statut_du_paiement,
+       (SELECT GROUP_CONCAT(DISTINCT c.payeur)
+          FROM contravention c WHERE c.id_mouvement = d.id_mouvement) AS payeur,
+       CONCAT_WS(' | ', d.observation, r.observation)   AS observation,
+       d.id_location, d.id_passage
+  FROM mouvement_vehicule d
+  JOIN vehicule v                  ON v.id_vehicule = d.id_vehicule
+  LEFT JOIN lieu ld                ON ld.id_lieu = d.id_lieu
+  LEFT JOIN conducteur cd          ON cd.id_conducteur = d.id_conducteur
+  LEFT JOIN commercial ca          ON ca.id_commercial = d.id_commercial
+  LEFT JOIN commercial cv          ON cv.id_commercial = d.id_validateur
+  LEFT JOIN mouvement_vehicule r   ON r.id_mouvement_depart = d.id_mouvement
+  LEFT JOIN lieu lr                ON lr.id_lieu = r.id_lieu
+ WHERE d.type_mouvement IN ('MISE_EN_LOCATION','SORTIE_INTERNE','ENVOI_GARAGE');
+
+-- ---- Situation actuelle de chaque véhicule (dernier mouvement) -----------------------------
+CREATE OR REPLACE VIEW v_situation_vehicule AS
+SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
+       cat.libelle AS categorie, v.statut, v.kilometrage,
+       m.type_mouvement AS dernier_mouvement, m.date_mouvement AS date_dernier_mouvement,
+       l.id_location AS location_en_cours, CONCAT_WS(' ', cl.prenom, cl.nom) AS client_en_cours
+  FROM vehicule v
+  JOIN categorie_vehicule cat ON cat.id_categorie = v.id_categorie
+  LEFT JOIN mouvement_vehicule m ON m.id_mouvement = (
+         SELECT m2.id_mouvement FROM mouvement_vehicule m2
+          WHERE m2.id_vehicule = v.id_vehicule
+          ORDER BY m2.date_mouvement DESC, m2.id_mouvement DESC LIMIT 1)
+  LEFT JOIN location l ON l.id_vehicule = v.id_vehicule AND l.statut IN ('EN_COURS','EN_RETARD','EN_PROLONGATION')
+  LEFT JOIN client cl  ON cl.id_client = l.id_client;
+
+CREATE OR REPLACE VIEW v_vehicules_remplacement_disponibles AS
+SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, cat.libelle AS categorie
+  FROM vehicule v
+  JOIN categorie_vehicule cat ON cat.id_categorie = v.id_categorie
+ WHERE v.statut IN ('ENTREE_PARC','RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE')
+   AND NOT EXISTS (SELECT 1 FROM reservation r
+                    WHERE r.id_vehicule = v.id_vehicule
+                      AND r.statut IN ('CONFIRMEE','EN_ATTENTE')
+                      AND CURRENT_DATE BETWEEN r.date_debut_prevue AND r.date_fin_prevue);
+
+-- ---- Réservations : état calculé (équivalent de « Statut de la résa » du fichier RESA) -----
+CREATE OR REPLACE VIEW v_etat_reservations AS
+SELECT r.id_reservation, r.date_reservation, r.date_debut_prevue, r.date_fin_prevue, r.duree_jours,
+       v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
+       CONCAT_WS(' ', c.prenom, c.nom) AS client,
+       CONCAT_WS(' ', co.prenom, co.nom) AS agent_de_vente,
+       r.mission, r.lieu_mission, r.statut AS statut_confirmation, r.statut_paiement, r.statut_facturation,
+       CASE
+         WHEN r.statut IN ('ANNULEE','EXPIREE')   THEN 'ANNULEE'
+         WHEN l.statut = 'TERMINEE'               THEN 'TERMINEE'
+         WHEN l.id_location IS NOT NULL           THEN 'LOCATION_EN_COURS'
+         WHEN r.statut = 'REPORTEE'               THEN 'REPORTEE'
+         WHEN r.date_debut_prevue > CURRENT_DATE  THEN 'RESA_A_VENIR'
+         ELSE 'A_TRAITER'
+       END AS etat_resa,
+       (l.id_location IS NOT NULL) AS aboutie
+  FROM reservation r
+  JOIN vehicule v   ON v.id_vehicule = r.id_vehicule
+  JOIN client c     ON c.id_client = r.id_client
+  JOIN commercial co ON co.id_commercial = r.id_commercial
+  LEFT JOIN location l ON l.id_reservation = r.id_reservation;
+
+-- Équivalent de l'en-tête du fichier RESA : « Résa à venir / En cours / Terminée / Annulée »
+CREATE OR REPLACE VIEW v_synthese_reservations AS
+SELECT SUM(etat_resa = 'RESA_A_VENIR')      AS resa_a_venir,
+       SUM(etat_resa = 'LOCATION_EN_COURS') AS en_cours,
+       SUM(etat_resa = 'TERMINEE')          AS terminees,
+       SUM(etat_resa = 'ANNULEE')           AS annulees,
+       COUNT(*)                             AS total
+  FROM v_etat_reservations;
+
+CREATE OR REPLACE VIEW v_reservations_abouties     AS SELECT * FROM v_etat_reservations WHERE aboutie = 1;
+CREATE OR REPLACE VIEW v_reservations_non_abouties AS SELECT * FROM v_etat_reservations WHERE etat_resa = 'ANNULEE';
+
+CREATE OR REPLACE VIEW v_historique_reservations AS
+SELECT e.*, (SELECT COUNT(*) FROM suivi_reservation s WHERE s.id_reservation = e.id_reservation) AS nb_changements_statut
+  FROM v_etat_reservations e;
+
+-- ---- Affaires perdues -----------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_affaires_perdues_par_motif AS
+SELECT COALESCE(m.libelle, 'Non renseigné') AS motif, COUNT(*) AS nb_affaires,
+       COALESCE(SUM(a.montant_estime), 0) AS montant_estime_perdu
+  FROM affaire_perdue a LEFT JOIN motif_non_aboutissement m ON m.id_motif = a.id_motif
+ GROUP BY m.id_motif, m.libelle;
+
+-- ---- Contraventions : reproduit l'en-tête du fichier ANATT ---------------------------------
+-- Hypothèse : « Recouvrement attendu » = montants (+ frais) avancés par Hertz et à récupérer.
+CREATE OR REPLACE VIEW v_synthese_contraventions AS
+SELECT COALESCE(SUM(montant), 0)                                                          AS total_hors_frais,
+       COALESCE(SUM(CASE WHEN statut_paiement = 'PAYEE'   THEN montant END), 0)           AS payee_hors_frais,
+       COALESCE(SUM(CASE WHEN statut_paiement = 'PAYEE'   THEN frais END), 0)             AS frais_payes,
+       COALESCE(SUM(CASE WHEN statut_paiement = 'IMPAYEE' THEN montant END), 0)           AS reste_a_payer,
+       COALESCE(SUM(CASE WHEN payeur = 'HERTZ' AND statut_paiement = 'PAYEE'
+                         THEN montant + frais END), 0)                                    AS recouvrement_attendu,
+       COALESCE(SUM(montant_recouvre), 0)                                                 AS recouvrement_effectue,
+       COALESCE(SUM(CASE WHEN statut_recouvrement = 'NON_LIEU' THEN montant + frais END), 0) AS recouvrement_non_lieu,
+       COALESCE(SUM(frais_recouvres), 0)                                                  AS frais_recouvres,
+       'XOF' AS devise
+  FROM contravention;
+
+CREATE OR REPLACE VIEW v_contraventions_detail AS
+SELECT c.id_contravention, c.numero_contravention, t.libelle AS contravention, c.date_infraction,
+       c.montant, c.frais, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
+       cl.nom AS client, CONCAT_WS(' ', co.prenom, co.nom) AS agent_de_vente,
+       c.statut_paiement, c.date_reglement, c.moyen_paiement, c.numero_quittance, c.payeur,
+       c.statut_recouvrement, c.date_recouvrement, c.montant_recouvre, c.id_location
+  FROM contravention c
+  JOIN type_contravention t ON t.id_type_contravention = c.id_type_contravention
+  JOIN vehicule v           ON v.id_vehicule = c.id_vehicule
+  LEFT JOIN client cl       ON cl.id_client = c.id_client
+  LEFT JOIN commercial co   ON co.id_commercial = c.id_commercial;
+
+-- ---- Chiffre d'affaires et encaissements ---------------------------------------------------
+CREATE OR REPLACE VIEW v_chiffre_affaires_mensuel AS
+SELECT DATE_FORMAT(f.date_emission, '%Y-%m') AS mois,
+       COUNT(*) AS nb_factures,
+       SUM(f.montant_ht)  AS ca_ht,
+       SUM(f.montant_ttc) AS ca_ttc
+  FROM facture f GROUP BY DATE_FORMAT(f.date_emission, '%Y-%m');
+
+CREATE OR REPLACE VIEW v_encaissements_mensuels AS
+SELECT DATE_FORMAT(date_paiement, '%Y-%m') AS mois, moyen_paiement, COUNT(*) AS nb_paiements, SUM(montant) AS total_encaisse
+  FROM paiement GROUP BY DATE_FORMAT(date_paiement, '%Y-%m'), moyen_paiement;
+
+CREATE OR REPLACE VIEW v_factures_impayees AS
+SELECT f.id_facture, f.numero_facture, f.date_emission, f.date_echeance, f.montant_ttc,
+       COALESCE(p.paye, 0) AS deja_paye, f.montant_ttc - COALESCE(p.paye, 0) AS reste_a_payer,
+       cl.nom AS client
+  FROM facture f
+  JOIN client cl ON cl.id_client = f.id_client
+  LEFT JOIN (SELECT id_facture, SUM(montant) AS paye FROM paiement WHERE id_facture IS NOT NULL GROUP BY id_facture) p
+         ON p.id_facture = f.id_facture
+ WHERE f.statut_paiement <> 'PAYEE';
+
+-- Reproduit les 3 colonnes de totaux du suivi Excel des locations (« total/semaine », « encaissé à date »,
+-- « non encaissé ») par semaine ISO puis par mois, selon la date de début de location.
+CREATE OR REPLACE VIEW v_suivi_encaissements_hebdo AS
+SELECT YEARWEEK(l.date_debut, 3) AS semaine, COUNT(*) AS nb_locations,
+       SUM(l.montant_total) AS total_semaine,
+       SUM(CASE WHEN l.statut_paiement = 'PAYEE' THEN l.montant_total ELSE COALESCE(p.paye, 0) END) AS encaisse_a_date,
+       SUM(l.montant_total) - SUM(CASE WHEN l.statut_paiement = 'PAYEE' THEN l.montant_total ELSE COALESCE(p.paye, 0) END) AS non_encaisse
+  FROM location l
+  LEFT JOIN (SELECT id_location, SUM(montant) AS paye FROM paiement WHERE id_location IS NOT NULL GROUP BY id_location) p
+         ON p.id_location = l.id_location
+ GROUP BY YEARWEEK(l.date_debut, 3);
+
+CREATE OR REPLACE VIEW v_suivi_encaissements_mensuel AS
+SELECT DATE_FORMAT(l.date_debut, '%Y-%m') AS mois, COUNT(*) AS nb_locations,
+       SUM(l.montant_total) AS total_mois,
+       SUM(CASE WHEN l.statut_paiement = 'PAYEE' THEN l.montant_total ELSE COALESCE(p.paye, 0) END) AS encaisse_a_date,
+       SUM(l.montant_total) - SUM(CASE WHEN l.statut_paiement = 'PAYEE' THEN l.montant_total ELSE COALESCE(p.paye, 0) END) AS non_encaisse
+  FROM location l
+  LEFT JOIN (SELECT id_location, SUM(montant) AS paye FROM paiement WHERE id_location IS NOT NULL GROUP BY id_location) p
+         ON p.id_location = l.id_location
+ GROUP BY DATE_FORMAT(l.date_debut, '%Y-%m');
+
+-- Reproduit le tableau Excel « Location » (une ligne par location)
+CREATE OR REPLACE VIEW v_tableau_locations AS
+SELECT l.id_location, cl.nom AS nom_du_client, v.immatriculation AS immat_vehicule,
+       DATE(l.date_debut) AS debut, DATE(l.date_fin_prevue) AS fin, l.duree_jours AS duree,
+       l.type_location,
+       (SELECT GROUP_CONCAT(DISTINCT p.moyen_paiement) FROM paiement p
+         WHERE p.id_location = l.id_location
+            OR p.id_facture IN (SELECT lf.id_facture FROM ligne_facture lf WHERE lf.id_location = l.id_location)) AS mode_de_paiement,
+       (SELECT GROUP_CONCAT(DISTINCT f.numero_facture) FROM ligne_facture lf JOIN facture f ON f.id_facture = lf.id_facture
+         WHERE lf.id_location = l.id_location) AS ref_facture,
+       (SELECT MIN(f.date_emission) FROM ligne_facture lf JOIN facture f ON f.id_facture = lf.id_facture
+         WHERE lf.id_location = l.id_location) AS date_facturation,
+       l.montant_total AS montant,
+       CASE l.statut_paiement WHEN 'PAYEE' THEN 'Oui' ELSE 'Non' END AS paye,
+       (SELECT MAX(DATE(p.date_paiement)) FROM paiement p
+         WHERE p.id_location = l.id_location
+            OR p.id_facture IN (SELECT lf.id_facture FROM ligne_facture lf WHERE lf.id_location = l.id_location)) AS date_de_paiement,
+       COALESCE(co.abreviation, CONCAT_WS(' ', co.prenom, co.nom)) AS commercial,
+       ag.code AS agence, l.avec_chauffeur, l.observation
+  FROM location l
+  JOIN client cl ON cl.id_client = l.id_client
+  JOIN vehicule v ON v.id_vehicule = l.id_vehicule
+  JOIN commercial co ON co.id_commercial = l.id_commercial
+  LEFT JOIN agence ag ON ag.id_agence = l.id_agence;
+
+-- ---- Performance des commerciaux -------------------------------------------------------------
+CREATE OR REPLACE VIEW v_performance_commerciaux AS
+SELECT t.*, ROUND(100 * t.nb_reservations_abouties / NULLIF(t.nb_reservations, 0), 1) AS taux_transformation_pct
+  FROM (SELECT c.id_commercial, CONCAT_WS(' ', c.prenom, c.nom) AS commercial, c.abreviation,
+               (SELECT a.code FROM agence a WHERE a.id_agence = c.id_agence) AS agence,
+               (SELECT COUNT(*) FROM reservation r WHERE r.id_commercial = c.id_commercial) AS nb_reservations,
+               (SELECT COUNT(*) FROM reservation r JOIN location l ON l.id_reservation = r.id_reservation
+                 WHERE r.id_commercial = c.id_commercial) AS nb_reservations_abouties,
+               (SELECT COUNT(*) FROM reservation r
+                 WHERE r.id_commercial = c.id_commercial AND r.statut IN ('ANNULEE','EXPIREE')) AS nb_reservations_non_abouties,
+               (SELECT COUNT(*) FROM affaire_perdue a WHERE a.id_commercial = c.id_commercial) AS nb_affaires_perdues,
+               (SELECT COUNT(*) FROM location l WHERE l.id_commercial = c.id_commercial) AS nb_locations,
+               (SELECT COALESCE(SUM(l.montant_total), 0) FROM location l WHERE l.id_commercial = c.id_commercial) AS montant_locations,
+               (SELECT COALESCE(SUM(lf.montant_ht), 0) FROM ligne_facture lf JOIN location l ON l.id_location = lf.id_location
+                 WHERE l.id_commercial = c.id_commercial) AS ca_facture_ht
+          FROM commercial c) t;
+
+-- ---- Maintenance -------------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_cout_reparations_vehicule AS
+SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
+       COUNT(DISTINCT p.id_passage) AS nb_passages, COALESCE(SUM(r.cout), 0) AS cout_total
+  FROM vehicule v
+  LEFT JOIN passage_garage p ON p.id_vehicule = v.id_vehicule
+  LEFT JOIN reparation r     ON r.id_passage = p.id_passage
+ GROUP BY v.id_vehicule, v.immatriculation, v.marque, v.modele;
+
+CREATE OR REPLACE VIEW v_historique_garage AS
+SELECT p.id_passage, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, g.nom AS garage,
+       p.type_passage, p.date_entree, p.date_sortie_prevue, p.date_sortie_reelle, p.statut, p.cout_total,
+       vr.immatriculation AS vehicule_remplacement
+  FROM passage_garage p
+  JOIN vehicule v ON v.id_vehicule = p.id_vehicule
+  JOIN garage g   ON g.id_garage = p.id_garage
+  LEFT JOIN vehicule vr ON vr.id_vehicule = p.id_vehicule_remplacement;
+
+-- ---- Parc : synthèse, échéances, sinistres ---------------------------------------------------------
+CREATE OR REPLACE VIEW v_parc_par_segment AS
+SELECT v.segment_parc, COALESCE(ce.nom, 'Non renseigné') AS centre, v.statut, COUNT(*) AS nb_vehicules
+  FROM vehicule v LEFT JOIN centre ce ON ce.id_centre = v.id_centre
+ GROUP BY v.segment_parc, ce.nom, v.statut;
+
+-- Véhicules dont la visite technique ou l'assurance expire dans moins de 60 jours (ou est déjà expirée)
+CREATE OR REPLACE VIEW v_echeances_vehicules AS
+SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, v.statut,
+       v.date_prochaine_visite_technique, DATEDIFF(v.date_prochaine_visite_technique, CURRENT_DATE) AS jours_avant_visite_technique,
+       v.date_expiration_assurance,       DATEDIFF(v.date_expiration_assurance, CURRENT_DATE)       AS jours_avant_fin_assurance
+  FROM vehicule v
+ WHERE v.statut <> 'SORTIE_DEFINITIVE'
+   AND (DATEDIFF(v.date_prochaine_visite_technique, CURRENT_DATE) <= 60
+        OR DATEDIFF(v.date_expiration_assurance, CURRENT_DATE) <= 60);
+
+CREATE OR REPLACE VIEW v_sinistres_ouverts AS
+SELECT s.id_sinistre, s.date_sinistre, s.type_sinistre, s.statut, s.description, s.declare_assurance,
+       s.numero_dossier_assurance, s.montant_estime, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule
+  FROM sinistre s JOIN vehicule v ON v.id_vehicule = s.id_vehicule
+ WHERE s.statut <> 'CLOS';
+
+-- =====================================================================================
+-- INDICATEURS DE PERFORMANCE (KPI)
+-- Conventions :
+--   * Chiffre d'affaires = montant des locations (location.montant_total, prolongations incluses),
+--     rattaché à la période de la DATE DE DÉBUT de la location (même règle que le suivi Excel).
+--     Le CA « facturé » (factures émises) reste disponible dans v_chiffre_affaires_mensuel ; le CA réparti au prorata
+--     des jours est dans v_ca_mensuel_prorata. « duree_totale_jours » = durée cumulée des locations démarrées dans
+--     la période (≠ jours loués dans le mois, voir v_jours_loues_vehicule_mensuel).
+--   * Jour loué = jour calendaire où le véhicule est sous contrat (jour de départ inclus, jour de
+--     retour exclu ; une location d'une seule journée compte 1 jour) : identique à location.duree_jours.
+--   * Jour d'immobilisation = jour où le véhicule est au garage (passage_garage) ou sous sinistre
+--     immobilisant non clos ; les chevauchements ne sont comptés qu'une fois.
+--   * Les taux se calculent par rapport aux « jours-véhicules » du parc : somme, pour chaque jour, des
+--     véhicules présents (entre date_entree_parc et date_sortie_parc ; entrée inconnue = présent dès le début).
+--   * Pour la flotte de LOCATION, filtrer sur segment_parc = 'LCD' (les véhicules en LLD/LEASING
+--     ne passent pas par le journal des locations courte durée).
+-- =====================================================================================
+
+-- ---- Chiffre d'affaires : par mois, par année, par véhicule, par commercial ------------------------
+CREATE OR REPLACE VIEW v_ca_mensuel AS
+SELECT DATE_FORMAT(l.date_debut, '%Y-%m') AS mois, COUNT(*) AS nb_locations,
+       SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total,
+       SUM(CASE WHEN l.type_location = 'COURTE_DUREE' THEN l.montant_total ELSE 0 END) AS ca_courte_duree,
+       SUM(CASE WHEN l.type_location = 'LONGUE_DUREE' THEN l.montant_total ELSE 0 END) AS ca_longue_duree,
+       ROUND(AVG(l.montant_total), 0) AS panier_moyen
+  FROM location l GROUP BY DATE_FORMAT(l.date_debut, '%Y-%m');
+
+CREATE OR REPLACE VIEW v_ca_annuel AS
+SELECT YEAR(l.date_debut) AS annee, COUNT(*) AS nb_locations, COUNT(DISTINCT l.id_vehicule) AS nb_vehicules_loues,
+       COUNT(DISTINCT l.id_client) AS nb_clients, SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total,
+       ROUND(SUM(l.montant_total) / COUNT(DISTINCT l.id_vehicule), 0) AS ca_moyen_par_vehicule,
+       ROUND(AVG(l.montant_total), 0) AS panier_moyen
+  FROM location l GROUP BY YEAR(l.date_debut);
+
+CREATE OR REPLACE VIEW v_ca_vehicule_annuel AS
+SELECT YEAR(l.date_debut) AS annee, v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
+       COUNT(*) AS nb_locations, SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total
+  FROM location l JOIN vehicule v ON v.id_vehicule = l.id_vehicule
+ GROUP BY YEAR(l.date_debut), v.id_vehicule, v.immatriculation, v.marque, v.modele;
+
+CREATE OR REPLACE VIEW v_ca_commercial_mensuel AS
+SELECT DATE_FORMAT(l.date_debut, '%Y-%m') AS mois, co.id_commercial, CONCAT_WS(' ', co.prenom, co.nom) AS commercial,
+       co.abreviation, COUNT(*) AS nb_locations, SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total
+  FROM location l JOIN commercial co ON co.id_commercial = l.id_commercial
+ GROUP BY DATE_FORMAT(l.date_debut, '%Y-%m'), co.id_commercial, co.prenom, co.nom, co.abreviation;
+
+CREATE OR REPLACE VIEW v_ca_commercial_annuel AS
+SELECT YEAR(l.date_debut) AS annee, co.id_commercial, CONCAT_WS(' ', co.prenom, co.nom) AS commercial,
+       co.abreviation, COUNT(*) AS nb_locations, SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total
+  FROM location l JOIN commercial co ON co.id_commercial = l.id_commercial
+ GROUP BY YEAR(l.date_debut), co.id_commercial, co.prenom, co.nom, co.abreviation;
+
+-- CA « réalisé » par mois, réparti AU PRORATA des jours de chaque location (utile pour les locations
+-- à cheval sur plusieurs mois ou de longue durée) : montant_total / duree_jours pour chaque jour loué.
+CREATE OR REPLACE VIEW v_ca_mensuel_prorata AS
+SELECT c.annee_mois AS mois, COUNT(DISTINCT l.id_location) AS nb_locations_actives,
+       COUNT(*) AS jours_vehicules_loues, ROUND(SUM(l.montant_total / l.duree_jours), 0) AS ca_prorata
+  FROM location l
+  JOIN calendrier c ON c.jour >= DATE(l.date_debut) AND c.jour < DATE(l.date_debut) + INTERVAL l.duree_jours DAY
+ GROUP BY c.annee_mois;
+
+-- ---- Nombre de jours loués dans le mois, par véhicule ----------------------------------------------
+CREATE OR REPLACE VIEW v_jours_loues_vehicule_mensuel AS
+SELECT l.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, c.annee_mois AS mois,
+       COUNT(DISTINCT c.jour) AS jours_loues, DAY(LAST_DAY(MIN(c.jour))) AS jours_dans_le_mois,
+       ROUND(100 * COUNT(DISTINCT c.jour) / DAY(LAST_DAY(MIN(c.jour))), 1) AS taux_occupation_mois_pct
+  FROM location l
+  JOIN vehicule v   ON v.id_vehicule = l.id_vehicule
+  JOIN calendrier c ON c.jour >= DATE(l.date_debut) AND c.jour < DATE(l.date_debut) + INTERVAL l.duree_jours DAY
+ GROUP BY l.id_vehicule, v.immatriculation, v.marque, v.modele, c.annee_mois;
+
+-- ---- Flotte : taux d'utilisation, d'immobilisation et de rotation par mois et par segment ----------
+-- (filtrer sur segment_parc = 'LCD' pour la flotte de location courte durée)
+CREATE OR REPLACE VIEW v_kpi_flotte_mensuel AS
+SELECT t.mois, t.segment_parc, ROUND(t.jours_vehicules_parc / t.jours_observes, 1) AS nb_vehicules_moyen,
+       t.jours_vehicules_parc, t.jours_loues, t.jours_immobilises, COALESCE(n.nb_locations, 0) AS nb_locations,
+       ROUND(100 * t.jours_loues / NULLIF(t.jours_vehicules_parc, 0), 1)      AS taux_utilisation_pct,
+       ROUND(100 * t.jours_immobilises / NULLIF(t.jours_vehicules_parc, 0), 1) AS taux_immobilisation_pct,
+       ROUND(COALESCE(n.nb_locations, 0) / NULLIF(t.jours_vehicules_parc / t.jours_observes, 0), 2) AS taux_rotation
+  FROM (SELECT c.annee_mois AS mois, v.segment_parc, COUNT(DISTINCT c.jour) AS jours_observes,
+               COUNT(*) AS jours_vehicules_parc,
+               SUM(EXISTS (SELECT 1 FROM location l
+                          WHERE l.id_vehicule = v.id_vehicule AND c.jour >= DATE(l.date_debut)
+                            AND c.jour < DATE(l.date_debut) + INTERVAL l.duree_jours DAY)) AS jours_loues,
+               SUM((EXISTS (SELECT 1 FROM passage_garage p
+                          WHERE p.id_vehicule = v.id_vehicule AND c.jour >= p.date_entree
+                            AND c.jour <= COALESCE(GREATEST(DATE_SUB(p.date_sortie_reelle, INTERVAL 1 DAY), p.date_entree), CURRENT_DATE))
+                 OR EXISTS (SELECT 1 FROM sinistre s
+                             WHERE s.id_vehicule = v.id_vehicule AND s.immobilisant = 1 AND c.jour >= s.date_sinistre
+                               AND c.jour <= COALESCE(GREATEST(DATE_SUB(s.date_cloture, INTERVAL 1 DAY), s.date_sinistre), CURRENT_DATE)))) AS jours_immobilises
+          FROM calendrier c
+          JOIN vehicule v ON c.jour >= COALESCE(v.date_entree_parc, (SELECT MIN(DATE(date_debut)) FROM location))
+                         AND c.jour <= COALESCE(v.date_sortie_parc, c.jour)
+         WHERE c.jour BETWEEN (SELECT MIN(DATE(date_debut)) FROM location) AND CURRENT_DATE
+         GROUP BY c.annee_mois, v.segment_parc) t
+  LEFT JOIN (SELECT DATE_FORMAT(l.date_debut, '%Y-%m') AS mois, v.segment_parc, COUNT(*) AS nb_locations
+               FROM location l JOIN vehicule v ON v.id_vehicule = l.id_vehicule
+              GROUP BY DATE_FORMAT(l.date_debut, '%Y-%m'), v.segment_parc) n
+         ON n.mois = t.mois AND n.segment_parc = t.segment_parc;
+
+-- ---- Durée de vie de chaque véhicule à date, avec son bilan cumulé ----------------------------------
+-- Début de vie = date de mise en service (à défaut, date d'entrée au parc). Fin = date de sortie (vente) ou aujourd'hui.
+CREATE OR REPLACE VIEW v_duree_vie_vehicule AS
+SELECT x.*,
+       ROUND(100 * x.jours_loues_total / NULLIF(x.duree_vie_jours, 0), 1)       AS taux_utilisation_vie_pct,
+       ROUND(100 * x.jours_immobilises_total / NULLIF(x.duree_vie_jours, 0), 1) AS taux_immobilisation_vie_pct
+  FROM (SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, v.segment_parc, v.statut,
+               COALESCE(v.date_mise_en_service, v.date_entree_parc) AS date_debut_vie,
+               COALESCE(v.date_sortie_parc, CURRENT_DATE)           AS date_fin_vie,
+               DATEDIFF(COALESCE(v.date_sortie_parc, CURRENT_DATE), COALESCE(v.date_mise_en_service, v.date_entree_parc)) AS duree_vie_jours,
+               TIMESTAMPDIFF(MONTH, COALESCE(v.date_mise_en_service, v.date_entree_parc), COALESCE(v.date_sortie_parc, CURRENT_DATE)) AS duree_vie_mois,
+               ROUND(DATEDIFF(COALESCE(v.date_sortie_parc, CURRENT_DATE), COALESCE(v.date_mise_en_service, v.date_entree_parc)) / 365.25, 2) AS duree_vie_annees,
+               v.kilometrage,
+               (SELECT COUNT(*) FROM location l WHERE l.id_vehicule = v.id_vehicule)                    AS nb_locations,
+               (SELECT COALESCE(SUM(l.duree_jours), 0) FROM location l WHERE l.id_vehicule = v.id_vehicule) AS jours_loues_total,
+               (SELECT COALESCE(SUM(l.montant_total), 0) FROM location l WHERE l.id_vehicule = v.id_vehicule) AS ca_total,
+               (SELECT COUNT(*) FROM passage_garage p WHERE p.id_vehicule = v.id_vehicule)               AS nb_passages_garage,
+               (SELECT COALESCE(SUM(p.cout_total), 0) FROM passage_garage p WHERE p.id_vehicule = v.id_vehicule) AS cout_maintenance_total,
+               (SELECT COUNT(*) FROM sinistre s WHERE s.id_vehicule = v.id_vehicule)                     AS nb_sinistres,
+               (SELECT COUNT(*) FROM calendrier c
+                 WHERE c.jour >= COALESCE(v.date_mise_en_service, v.date_entree_parc)
+                   AND c.jour <= COALESCE(v.date_sortie_parc, CURRENT_DATE)
+                   AND (EXISTS (SELECT 1 FROM passage_garage p
+                          WHERE p.id_vehicule = v.id_vehicule AND c.jour >= p.date_entree
+                            AND c.jour <= COALESCE(GREATEST(DATE_SUB(p.date_sortie_reelle, INTERVAL 1 DAY), p.date_entree), CURRENT_DATE))
+                 OR EXISTS (SELECT 1 FROM sinistre s
+                             WHERE s.id_vehicule = v.id_vehicule AND s.immobilisant = 1 AND c.jour >= s.date_sinistre
+                               AND c.jour <= COALESCE(GREATEST(DATE_SUB(s.date_cloture, INTERVAL 1 DAY), s.date_sinistre), CURRENT_DATE)))) AS jours_immobilises_total
+          FROM vehicule v) x;
+
+-- =====================================================================================
+-- 13. PROCÉDURES STOCKÉES (statistiques sur une période + maintenance de données)
+-- =====================================================================================
+DELIMITER //
+
+-- Chiffre d'affaires facturé sur une période : total, puis ventilation par type de location
+CREATE PROCEDURE sp_chiffre_affaires(IN p_debut DATE, IN p_fin DATE)
+BEGIN
+  SELECT COUNT(*) AS nb_factures, COALESCE(SUM(montant_ht), 0) AS ca_ht, COALESCE(SUM(montant_ttc), 0) AS ca_ttc
+    FROM facture WHERE date_emission BETWEEN p_debut AND p_fin;
+  SELECT COALESCE(l.type_location, 'AUTRE') AS type_prestation, COUNT(DISTINCT f.id_facture) AS nb_factures,
+         SUM(lf.montant_ht) AS ca_ht, SUM(ROUND(lf.montant_ht * (1 + f.taux_tva / 100), 2)) AS ca_ttc
+    FROM facture f
+    JOIN ligne_facture lf ON lf.id_facture = f.id_facture
+    LEFT JOIN location l  ON l.id_location = lf.id_location
+   WHERE f.date_emission BETWEEN p_debut AND p_fin
+   GROUP BY COALESCE(l.type_location, 'AUTRE');
+END//
+
+-- Chiffre d'affaires d'une période (règle : date de début de location) :
+--   1) total  2) par mois  3) par véhicule  4) par commercial
+CREATE PROCEDURE sp_kpi_chiffre_affaires(IN p_debut DATE, IN p_fin DATE)
+BEGIN
+  SELECT p_debut AS debut, p_fin AS fin, COUNT(*) AS nb_locations, COALESCE(SUM(duree_jours), 0) AS duree_totale_jours,
+         COALESCE(SUM(montant_total), 0) AS ca_total, ROUND(AVG(montant_total), 0) AS panier_moyen
+    FROM location WHERE DATE(date_debut) BETWEEN p_debut AND p_fin;
+  SELECT DATE_FORMAT(date_debut, '%Y-%m') AS mois, COUNT(*) AS nb_locations, SUM(duree_jours) AS duree_totale_jours,
+         SUM(montant_total) AS ca_total
+    FROM location WHERE DATE(date_debut) BETWEEN p_debut AND p_fin
+   GROUP BY DATE_FORMAT(date_debut, '%Y-%m') ORDER BY mois;
+  SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, COUNT(*) AS nb_locations,
+         SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total
+    FROM location l JOIN vehicule v ON v.id_vehicule = l.id_vehicule
+   WHERE DATE(l.date_debut) BETWEEN p_debut AND p_fin
+   GROUP BY v.id_vehicule, v.immatriculation, v.marque, v.modele ORDER BY ca_total DESC;
+  SELECT co.id_commercial, CONCAT_WS(' ', co.prenom, co.nom) AS commercial, co.abreviation, COUNT(*) AS nb_locations,
+         SUM(l.duree_jours) AS duree_totale_jours, SUM(l.montant_total) AS ca_total
+    FROM location l JOIN commercial co ON co.id_commercial = l.id_commercial
+   WHERE DATE(l.date_debut) BETWEEN p_debut AND p_fin
+   GROUP BY co.id_commercial, co.prenom, co.nom, co.abreviation ORDER BY ca_total DESC;
+END//
+
+-- Indicateurs de flotte sur une période, pour un segment (NULL = tous ; 'LCD' = flotte de location courte durée) :
+--   1) synthèse : taux d'utilisation, taux d'immobilisation, taux de rotation
+--   2) détail par véhicule
+CREATE PROCEDURE sp_kpi_flotte(IN p_debut DATE, IN p_fin DATE, IN p_segment VARCHAR(10))
+BEGIN
+  DECLARE v_fin DATE DEFAULT LEAST(p_fin, CURRENT_DATE);
+  DECLARE v_jours INT DEFAULT GREATEST(DATEDIFF(LEAST(p_fin, CURRENT_DATE), p_debut) + 1, 0);
+  DROP TEMPORARY TABLE IF EXISTS tmp_kpi_flotte;
+  CREATE TEMPORARY TABLE tmp_kpi_flotte AS
+  SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule, v.segment_parc,
+         COUNT(*) AS jours_parc,
+         SUM(EXISTS (SELECT 1 FROM location l
+                          WHERE l.id_vehicule = v.id_vehicule AND c.jour >= DATE(l.date_debut)
+                            AND c.jour < DATE(l.date_debut) + INTERVAL l.duree_jours DAY)) AS jours_loues,
+         SUM((EXISTS (SELECT 1 FROM passage_garage p
+                          WHERE p.id_vehicule = v.id_vehicule AND c.jour >= p.date_entree
+                            AND c.jour <= COALESCE(GREATEST(DATE_SUB(p.date_sortie_reelle, INTERVAL 1 DAY), p.date_entree), CURRENT_DATE))
+                 OR EXISTS (SELECT 1 FROM sinistre s
+                             WHERE s.id_vehicule = v.id_vehicule AND s.immobilisant = 1 AND c.jour >= s.date_sinistre
+                               AND c.jour <= COALESCE(GREATEST(DATE_SUB(s.date_cloture, INTERVAL 1 DAY), s.date_sinistre), CURRENT_DATE)))) AS jours_immobilises,
+         (SELECT COUNT(*) FROM location l2 WHERE l2.id_vehicule = v.id_vehicule
+             AND DATE(l2.date_debut) BETWEEN p_debut AND p_fin) AS nb_locations
+    FROM vehicule v
+    JOIN calendrier c ON c.jour BETWEEN p_debut AND v_fin
+                     AND c.jour >= COALESCE(v.date_entree_parc, p_debut)
+                     AND c.jour <= COALESCE(v.date_sortie_parc, v_fin)
+   WHERE (p_segment IS NULL OR v.segment_parc = p_segment)
+   GROUP BY v.id_vehicule, v.immatriculation, v.marque, v.modele, v.segment_parc;
+
+  SELECT p_debut AS debut, v_fin AS fin_effective, COUNT(*) AS nb_vehicules,
+         ROUND(SUM(jours_parc) / NULLIF(v_jours, 0), 1) AS nb_vehicules_moyen,
+         SUM(jours_parc) AS jours_vehicules_parc, SUM(jours_loues) AS jours_loues,
+         SUM(jours_immobilises) AS jours_immobilises, SUM(nb_locations) AS nb_locations,
+         ROUND(100 * SUM(jours_loues) / NULLIF(SUM(jours_parc), 0), 1)      AS taux_utilisation_pct,
+         ROUND(100 * SUM(jours_immobilises) / NULLIF(SUM(jours_parc), 0), 1) AS taux_immobilisation_pct,
+         ROUND(SUM(nb_locations) / NULLIF(SUM(jours_parc) / NULLIF(v_jours, 0), 0), 2) AS taux_rotation
+    FROM tmp_kpi_flotte;
+
+  SELECT t.*, ROUND(100 * t.jours_loues / NULLIF(t.jours_parc, 0), 1)      AS taux_utilisation_pct,
+              ROUND(100 * t.jours_immobilises / NULLIF(t.jours_parc, 0), 1) AS taux_immobilisation_pct
+    FROM tmp_kpi_flotte t ORDER BY taux_utilisation_pct DESC, t.immatriculation;
+  DROP TEMPORARY TABLE IF EXISTS tmp_kpi_flotte;
+END//
+
+-- Prolonge le calendrier (par défaut jusqu'à 2040) : CALL sp_peupler_calendrier('2050-12-31');
+CREATE PROCEDURE sp_peupler_calendrier(IN p_fin DATE)
+BEGIN
+  DECLARE v_debut DATE;
+  SET v_debut = COALESCE((SELECT MAX(jour) + INTERVAL 1 DAY FROM calendrier), DATE '2020-01-01');
+  INSERT INTO calendrier (jour)
+  SELECT v_debut + INTERVAL (a.n + 10*b.n + 100*c.n + 1000*d.n + 10000*e.n) DAY
+    FROM (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a,
+         (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b,
+         (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c,
+         (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d,
+         (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) e
+   WHERE v_debut + INTERVAL (a.n + 10*b.n + 100*c.n + 1000*d.n + 10000*e.n) DAY <= p_fin;
+END//
+
+-- Performance des commerciaux sur une période
+CREATE PROCEDURE sp_performance_commerciaux(IN p_debut DATE, IN p_fin DATE)
+BEGIN
+  SELECT t.*, ROUND(100 * t.nb_reservations_abouties / NULLIF(t.nb_reservations, 0), 1) AS taux_transformation_pct
+    FROM (SELECT c.id_commercial, CONCAT_WS(' ', c.prenom, c.nom) AS commercial, c.abreviation,
+                 (SELECT COUNT(*) FROM reservation r WHERE r.id_commercial = c.id_commercial
+                     AND r.date_reservation BETWEEN p_debut AND p_fin) AS nb_reservations,
+                 (SELECT COUNT(*) FROM reservation r JOIN location l ON l.id_reservation = r.id_reservation
+                   WHERE r.id_commercial = c.id_commercial AND r.date_reservation BETWEEN p_debut AND p_fin) AS nb_reservations_abouties,
+                 (SELECT COUNT(*) FROM affaire_perdue a WHERE a.id_commercial = c.id_commercial
+                     AND a.date_reservation BETWEEN p_debut AND p_fin) AS nb_affaires_perdues,
+                 (SELECT COUNT(*) FROM location l WHERE l.id_commercial = c.id_commercial
+                     AND DATE(l.date_debut) BETWEEN p_debut AND p_fin) AS nb_locations,
+                 (SELECT COALESCE(SUM(l.montant_total), 0) FROM location l WHERE l.id_commercial = c.id_commercial
+                     AND DATE(l.date_debut) BETWEEN p_debut AND p_fin) AS montant_locations,
+                 (SELECT COALESCE(SUM(lf.montant_ht), 0) FROM ligne_facture lf
+                    JOIN facture f ON f.id_facture = lf.id_facture JOIN location l ON l.id_location = lf.id_location
+                   WHERE l.id_commercial = c.id_commercial AND f.date_emission BETWEEN p_debut AND p_fin) AS ca_facture_ht
+            FROM commercial c) t
+   ORDER BY t.montant_locations DESC;
+END//
+
+-- Passe en EN_RETARD les locations dont la date de retour prévue est dépassée
+-- (à planifier chaque jour, voir l'EVENT en commentaire ci-dessous)
+CREATE PROCEDURE sp_marquer_locations_en_retard()
+BEGIN
+  UPDATE location SET statut = 'EN_RETARD'
+   WHERE statut = 'EN_COURS' AND date_retour_reelle IS NULL AND date_fin_prevue < NOW();
+END//
+
+-- Recalcule le statut et le kilométrage des véhicules à partir du journal des mouvements
+-- (utile après un import d'historique avec @import_historique = 1)
+CREATE PROCEDURE sp_recalculer_statuts_vehicules()
+BEGIN
+  UPDATE vehicule v
+    JOIN mouvement_vehicule m ON m.id_vehicule = v.id_vehicule
+     SET v.statut = m.type_mouvement   -- statut = dernier type de mouvement du journal
+   WHERE NOT EXISTS (SELECT 1 FROM mouvement_vehicule m2
+                      WHERE m2.id_vehicule = m.id_vehicule
+                        AND (m2.date_mouvement > m.date_mouvement
+                             OR (m2.date_mouvement = m.date_mouvement AND m2.id_mouvement > m.id_mouvement)));
+  UPDATE vehicule v SET v.statut = 'ENVOI_GARAGE'
+   WHERE v.statut IN ('ENTREE_PARC','RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE')
+     AND EXISTS (SELECT 1 FROM sinistre s WHERE s.id_vehicule = v.id_vehicule AND s.immobilisant = 1 AND s.statut <> 'CLOS');
+  UPDATE vehicule v
+     SET v.kilometrage = GREATEST(v.kilometrage,
+           COALESCE((SELECT MAX(m.kilometrage) FROM mouvement_vehicule m WHERE m.id_vehicule = v.id_vehicule), 0));
+END//
+
+DELIMITER ;
+
+-- Exécution quotidienne optionnelle (nécessite : SET GLOBAL event_scheduler = ON;)
+-- CREATE EVENT ev_locations_en_retard ON SCHEDULE EVERY 1 DAY STARTS CURRENT_DATE + INTERVAL 1 DAY
+--   DO CALL sp_marquer_locations_en_retard();

@@ -1,4 +1,4 @@
-// Jeu de démo en mémoire — strict miroir de seed.sql (mêmes ids, mêmes valeurs).
+// Jeu de démo du driver mémoire, distinct des données de référence MySQL.
 // Utilisé quand DB_DRIVER=memory. Le hash admin est calculé au démarrage
 // (même mot de passe que seed.sql : hertz2025).
 import { hashPassword } from "../../lib/password.js"
