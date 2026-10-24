@@ -37,13 +37,13 @@ authentification JWT et données servies par API (driver mémoire ou MySQL).
 ```bash
 npm install
 npm run dev          # frontend Vite sur http://localhost:8443
-npm run server:dev   # backend Express sur http://localhost:3001 (2e terminal)
+npm run server:dev   # backend Express sur http://localhost:3101 (2e terminal)
 npm run build        # build production frontend dans dist/
 npm run preview      # prévisualiser le build
 npm run format       # formater le code (oxfmt)
 ```
 
-Le frontend appelle le backend via `VITE_API_URL` (défaut `http://localhost:3001`,
+Le frontend appelle le backend via `VITE_API_URL` (défaut `http://localhost:3101`,
 voir `.env.example`). Sans backend démarré, les pages affichent « Serveur injoignable ».
 
 > Si un serveur de dev tournait avec l'ancienne config, redémarrez-le pour prendre en compte le

@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import Icon from "@/shared/components/Icon"
 import Logo from "@/shared/components/Logo"
 import { HERO_PHOTO } from "@/shared/data/mockData"
 import { ROUTES } from "@/app/routes"
+import { apiFetch } from "@/shared/api/client"
 
 const MODULES: Array<[string, string, string, string]> = [
   [
@@ -32,6 +34,22 @@ const MODULES: Array<[string, string, string, string]> = [
 ]
 
 export default function HomePage() {
+  const [vehiclesTotal, setVehiclesTotal] = useState<number | null>(null)
+
+  useEffect(() => {
+    let active = true
+    apiFetch<{ vehiclesTotal: number }>("/api/public/metrics")
+      .then((metrics) => {
+        if (active) setVehiclesTotal(metrics.vehiclesTotal)
+      })
+      .catch(() => {
+        if (active) setVehiclesTotal(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
   return (
     <main>
       <header className="public-header">
@@ -76,7 +94,7 @@ export default function HomePage() {
           </Link>
         </div>
         <div className="hero-metric">
-          <strong>64</strong>
+          <strong>{vehiclesTotal ?? "—"}</strong>
           <span>
             véhicules suivis
             <br />

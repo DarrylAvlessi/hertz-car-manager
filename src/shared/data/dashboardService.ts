@@ -30,8 +30,11 @@ export interface MonthlyPoint {
 interface VehiculeDto {
   id: number
   immatriculation: string
-  marqueModele: string
-  categorie: string
+  marque?: string
+  modele?: string
+  marqueModele?: string
+  categorie?: string
+  categorieId?: number
   kilometrage: number
   statut: string
 }
@@ -113,8 +116,8 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
         headers: ["Immatriculation", "Véhicule", "Catégorie", "Kilométrage", "Situation"],
         rows: rows.map((v) => [
           v.immatriculation,
-          v.marqueModele,
-          v.categorie,
+          v.marqueModele ?? `${v.marque ?? ""} ${v.modele ?? ""}`.trim(),
+          v.categorie ?? "—",
           formatKm(v.kilometrage),
           v.statut,
         ]),

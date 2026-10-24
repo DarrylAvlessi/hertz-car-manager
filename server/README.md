@@ -7,7 +7,7 @@ Express + TypeScript strict, stockage interchangeable **memory | MySQL** via `DB
 ```bash
 cp .env.example .env   # renseigner JWT_SECRET (déjà fait en local)
 npm install
-npm run dev            # http://localhost:3001, driver=memory seedé
+npm run dev            # http://localhost:3101, driver=memory seedé
 ```
 
 ## Brancher MySQL (plus tard)
@@ -27,7 +27,7 @@ npm run dev
 | `npm run build`   | compile vers `dist/` (tsc strict)                  |
 | `npm run start`   | lance `dist/index.js` (prod)                       |
 | `npm run typecheck` | vérification TypeScript sans émission            |
-| `npm run db:migrate` | exécute `schema.sql` + `seed.sql` (MySQL requis) |
+| `npm run db:migrate` | exécute `schema.sql` + `seed.sql` et ajoute les références manquantes vers les véhicules; échoue si des historiques orphelins empêchent leur rétablissement (MySQL requis) |
 
 ## API (base `/api`, JWT Bearer sauf `/health`)
 
@@ -36,12 +36,16 @@ npm run dev
 | GET     | `/health`                              | —    | statut + driver actif                    |
 | POST    | `/auth/login` `{email,password}`       | —    | → `{token, user}`                        |
 | GET     | `/auth/me`                             | auth | profil du token                          |
+| GET/POST | `/parc/categories`                    | resp | liste et création des catégories véhicule |
+| PUT/DELETE | `/parc/categories/:id`              | resp | modification et suppression d’une catégorie |
+| GET/POST | `/parc/modeles`                       | resp | liste et création des modèles véhicule |
+| PUT/DELETE | `/parc/modeles/:id`                 | resp | modification et suppression d’un modèle |
 | GET     | `/vehicules?q&limit`                   | resp | liste véhicules                          |
 | GET     | `/vehicules/:id`                       | resp | détail                                   |
 | GET     | `/vehicules/:id/disponibilite?from&to` | resp | règle garage/location/résa (tunnel Prince) |
 | POST    | `/vehicules`                           | resp | création (201, 409 si doublon)           |
 | PUT     | `/vehicules/:id`                       | resp | modification                             |
-| DELETE  | `/vehicules/:id`                       | resp | 204, 409 si lié à location/résa         |
+| DELETE  | `/vehicules/:id`                       | resp | 204 uniquement pour `ENTREE_PARC`, `RETOUR_LOCATION`, `RETOUR_INTERNE`, `RETOUR_GARAGE` ou `SORTIE_DEFINITIVE`, si aucune autre table ne le référence; sinon 409. |
 | GET     | `/clients`, `/clients/:id`, `/clients/:id/fiche` | resp | + fiche enrichie (nb locations, dernière opération) |
 | GET     | `/commerciaux`, `/commerciaux/:id`     | resp | fiches avec CA + performance calculés    |
 | GET     | `/locations?q&limit`, `/locations/:id` | resp | fiches avec noms client/véhicule         |

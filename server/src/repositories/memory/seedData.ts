@@ -4,21 +4,37 @@
 import { hashPassword } from "../../lib/password.js"
 import type {
   AdminRecord,
+  CategorieVehicule,
+  Centre,
+  Garage,
+  PassageGarage,
+  Reparation,
   Client,
   Commercial,
   Location,
   Maintenance,
+  ModeleVehicule,
   Mouvement,
   Reservation,
   Vehicule,
+  Prolongation,
+  VenteVehicule,
 } from "../types.js"
 
 export interface SeedData {
   admin: AdminRecord
+  categories: CategorieVehicule[]
+  modeles: ModeleVehicule[]
+  centres: Centre[]
+  garages: Garage[]
+  passagesGarage: PassageGarage[]
+  reparations: Reparation[]
   commerciaux: Commercial[]
   clients: Client[]
   vehicules: Vehicule[]
   locations: Location[]
+  prolongations: Prolongation[]
+  ventesVehicules: VenteVehicule[]
   reservations: Reservation[]
   maintenances: Maintenance[]
   mouvements: Mouvement[]
@@ -33,6 +49,32 @@ export async function buildSeedData(): Promise<SeedData> {
       role: "responsable",
       passwordHash: await hashPassword("hertz2025"),
     },
+    categories: [],
+    modeles: [],
+    centres: [],
+    garages: [
+      { id: 1, nom: "Japan Motors", adresse: null, telephone: null },
+      { id: 2, nom: "Garage Rousseau", adresse: null, telephone: null },
+    ],
+    passagesGarage: [
+      {
+        id: 1,
+        typePassage: "REPARATION",
+        dateEntree: "2026-10-14",
+        dateSortiePrevue: null,
+        dateSortieReelle: null,
+        kmEntree: null,
+        motif: "Date d'entrée inconnue (date d'enregistrement)",
+        statut: "EN_COURS",
+        coutTotal: 0,
+        vehiculeId: 3,
+        garageId: 1,
+        vehicule: "CC 9082 RB",
+        garage: "Japan Motors",
+        vehiculeRemplacementId: null,
+      },
+    ],
+    reparations: [],
     commerciaux: [
       { id: 1, nom: "Aïcha Sossa", contact: "a.sossa@hertz.bj" },
       { id: 2, nom: "Koffi Orou", contact: "k.orou@hertz.bj" },
@@ -56,7 +98,7 @@ export async function buildSeedData(): Promise<SeedData> {
         marqueModele: "Toyota Corolla",
         categorie: "Berline",
         kilometrage: 42650,
-        statut: "Disponible",
+        statut: "RESERVATION",
       },
       {
         id: 2,
@@ -64,7 +106,7 @@ export async function buildSeedData(): Promise<SeedData> {
         marqueModele: "Hyundai Tucson",
         categorie: "SUV",
         kilometrage: 28100,
-        statut: "En location",
+        statut: "MISE_EN_LOCATION",
       },
       {
         id: 3,
@@ -72,7 +114,7 @@ export async function buildSeedData(): Promise<SeedData> {
         marqueModele: "Mercedes Classe C",
         categorie: "Premium",
         kilometrage: 35820,
-        statut: "Entretien",
+        statut: "ENVOI_GARAGE",
       },
       {
         id: 4,
@@ -80,7 +122,7 @@ export async function buildSeedData(): Promise<SeedData> {
         marqueModele: "Suzuki Dzire",
         categorie: "Citadine",
         kilometrage: 51240,
-        statut: "Disponible",
+        statut: "RETOUR_LOCATION",
       },
     ],
     locations: [
@@ -94,7 +136,7 @@ export async function buildSeedData(): Promise<SeedData> {
         dateDebut: "2025-06-01",
         dateFin: "2025-09-30",
         montant: 6200000,
-        statut: "En cours",
+        statut: "EN_COURS",
       },
       {
         id: 2,
@@ -106,7 +148,7 @@ export async function buildSeedData(): Promise<SeedData> {
         dateDebut: "2025-06-18",
         dateFin: "2025-06-24",
         montant: 900000,
-        statut: "À retourner",
+        statut: "EN_RETARD",
       },
       {
         id: 3,
@@ -118,7 +160,7 @@ export async function buildSeedData(): Promise<SeedData> {
         dateDebut: "2025-01-05",
         dateFin: "2025-12-31",
         montant: 9900000,
-        statut: "En cours",
+        statut: "EN_COURS",
       },
       {
         id: 4,
@@ -130,9 +172,11 @@ export async function buildSeedData(): Promise<SeedData> {
         dateDebut: "2025-06-10",
         dateFin: "2025-06-16",
         montant: 1400000,
-        statut: "Retourné",
+        statut: "TERMINEE",
       },
     ],
+    prolongations: [],
+    ventesVehicules: [],
     reservations: [
       {
         id: 1,
@@ -188,13 +232,14 @@ export async function buildSeedData(): Promise<SeedData> {
       },
     ],
     mouvements: [
-      { id: 1, vehiculeId: 1, type: "Acquisition", date: "2023-03-12", commentaire: "Achat concessionnaire Cotonou" },
-      { id: 2, vehiculeId: 2, type: "Acquisition", date: "2023-06-04", commentaire: "Achat concessionnaire Cotonou" },
-      { id: 3, vehiculeId: 3, type: "Acquisition", date: "2022-11-20", commentaire: "Import occasion Allemagne" },
-      { id: 4, vehiculeId: 4, type: "Acquisition", date: "2023-09-15", commentaire: "Achat concessionnaire Cotonou" },
-      { id: 5, vehiculeId: 2, type: "Mise en location", date: "2025-06-01", commentaire: "LOC-02581 Groupe Tèkponon" },
-      { id: 6, vehiculeId: 4, type: "Retour", date: "2025-06-16", commentaire: "LOC-02561 Jean Loko" },
-      { id: 7, vehiculeId: 3, type: "Maintenance", date: "2025-06-10", commentaire: "Révision 30 000 km" },
+      { id: 1, vehiculeId: 1, type: "ENTREE_PARC", motif: "AUTRE", kilometrage: 42650, date: "2023-03-12", commentaire: "Achat concessionnaire Cotonou" },
+      { id: 2, vehiculeId: 2, type: "ENTREE_PARC", motif: "AUTRE", kilometrage: 28100, date: "2023-06-04", commentaire: "Achat concessionnaire Cotonou" },
+      { id: 3, vehiculeId: 3, type: "ENTREE_PARC", motif: "AUTRE", kilometrage: 35820, date: "2022-11-20", commentaire: "Import occasion Allemagne" },
+      { id: 4, vehiculeId: 4, type: "ENTREE_PARC", motif: "AUTRE", kilometrage: 51240, date: "2023-09-15", commentaire: "Achat concessionnaire Cotonou" },
+      { id: 5, vehiculeId: 2, type: "MISE_EN_LOCATION", motif: "LOCATION", kilometrage: 28100, date: "2025-06-01", commentaire: "LOC-02581 Groupe Tèkponon" },
+      { id: 6, vehiculeId: 4, type: "RETOUR_LOCATION", motif: "LOCATION", kilometrage: 51240, date: "2025-06-16", commentaire: "LOC-02561 Jean Loko" },
+      { id: 7, vehiculeId: 3, type: "ENVOI_GARAGE", motif: "GARAGE", kilometrage: 35820, date: "2025-06-10", commentaire: "Révision 30 000 km" },
+      { id: 8, vehiculeId: 1, type: "RESERVATION", motif: "LOCATION", kilometrage: 42650, date: "2025-06-17", commentaire: "Véhicule réservé pour une réservation de démonstration" },
     ],
   }
 }

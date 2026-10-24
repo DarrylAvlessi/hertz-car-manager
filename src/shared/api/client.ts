@@ -1,7 +1,7 @@
 // Client HTTP vers hertz-server. Le token JWT est joint en Bearer quand présent.
 // En cas d'échec réseau, ApiError(status 0) au lieu d'une exception fetch brute.
 const BASE: string =
-  (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3001"
+  (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3101"
 
 const TOKEN_KEY = "hertz-auth-token"
 
