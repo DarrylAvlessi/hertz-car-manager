@@ -91,7 +91,7 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | POST    | `/reservations`                        | resp | création avec client, commercial et véhicule associés |
 | GET     | `/maintenances`, `/maintenances/:id`   | resp | passages garage                          |
 | GET     | `/mouvements?vehiculeId`               | resp | flux chronologiques                      |
-| GET     | `/stats/overview`, `/stats/monthly`    | resp | KPIs + série mensuelle                   |
+| GET     | `/stats/overview`, `/stats/monthly`, `/stats/daily`, `/stats/fleet-status` | resp | KPIs + série mensuelle + quotidiens + état de la flotte |
 | GET     | `/export/clients/:id/fiche`            | resp | fiche client PDF (token header ou `?token=`) |
 | GET     | `/export/rapports/activite?debut&fin`  | resp | rapport d'activité PDF                   |
 

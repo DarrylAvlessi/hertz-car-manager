@@ -39,10 +39,13 @@ import type {
   ModeleVehiculeRepo,
   Maintenance,
   MaintenanceRepo,
+  DailyStat,
+  FleetStatus,
   MonthlyPoint,
   Mouvement,
   MouvementRepo,
   OverviewStats,
+  StatsPeriod,
   Repositories,
   Reservation,
   ReservationFiche,
@@ -1928,9 +1931,10 @@ class MysqlVenteVehiculeRepo implements VenteVehiculeRepo {
 class MysqlStatsRepo implements StatsRepo {
   constructor(private pool: mysql.Pool) {}
 
-  async overview(): Promise<OverviewStats> {
+  async overview(params?: StatsPeriod): Promise<OverviewStats> {
+    const dateWhere = this.statsDateWhere("date_debut", params)
     const [[ca]] = (await this.pool.query(
-      "SELECT COALESCE(SUM(montant), 0) AS total FROM location WHERE statut <> 'Annulé'",
+      `SELECT COALESCE(SUM(montant), 0) AS total FROM location WHERE statut <> 'Annulé' ${dateWhere}`,
     )) as unknown as Row[][]
     const [[dispo]] = (await this.pool.query(
       "SELECT COUNT(*) AS n FROM vehicule WHERE statut IN ('ENTREE_PARC', 'RETOUR_LOCATION', 'RETOUR_INTERNE', 'RETOUR_GARAGE')",
@@ -1939,13 +1943,13 @@ class MysqlStatsRepo implements StatsRepo {
       "SELECT COUNT(*) AS n FROM vehicule",
     )) as unknown as Row[][]
     const [[actives]] = (await this.pool.query(
-      "SELECT COUNT(*) AS n FROM location WHERE statut IN ('En cours', 'À retourner')",
+      `SELECT COUNT(*) AS n FROM location WHERE statut IN ('En cours', 'À retourner') ${dateWhere}`,
     )) as unknown as Row[][]
     const [[attente]] = (await this.pool.query(
       "SELECT COUNT(*) AS n FROM reservation WHERE statut = 'En attente'",
     )) as unknown as Row[][]
     const [[locCount]] = (await this.pool.query(
-      "SELECT COUNT(*) AS n FROM location WHERE statut <> 'Annulé'",
+      `SELECT COUNT(*) AS n FROM location WHERE statut <> 'Annulé' ${dateWhere}`,
     )) as unknown as Row[][]
     const [[abouties]] = (await this.pool.query(
       "SELECT COUNT(*) AS n FROM reservation WHERE statut = 'Aboutie'",
@@ -1956,10 +1960,25 @@ class MysqlStatsRepo implements StatsRepo {
     const totalVeh = num((total as Row).n)
     const nbActives = num((actives as Row).n)
     const round1 = (n: number): number => Math.round(n * 10) / 10
+    const [[grow]] = (await this.pool.query(
+      `SELECT
+          COALESCE(SUM(CASE WHEN date_debut >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN montant_total ELSE 0 END), 0) AS ca_curr,
+          COALESCE(SUM(CASE WHEN date_debut >= DATE_SUB(CURDATE(), INTERVAL 60 DAY) AND date_debut < DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN montant_total ELSE 0 END), 0) AS ca_prev
+        FROM location
+        WHERE statut <> 'Annulé' ${dateWhere}`,
+    )) as unknown as Row[][]
+    const caCurr = num((grow as Row).ca_curr)
+    const caPrev = num((grow as Row).ca_prev)
+    const caCroissance =
+      caPrev > 0
+        ? `${Math.round(((caCurr - caPrev) / caPrev) * 100)}%`
+        : caCurr > 0
+          ? "+100%"
+          : "0%"
     return {
       caTotal: num((ca as Row).total),
       devise: "FCFA",
-      caCroissance: "+12,6%",
+      caCroissance,
       vehiculesDisponibles: num((dispo as Row).n),
       vehiculesTotal: totalVeh,
       locationsActives: nbActives,
@@ -1971,8 +1990,95 @@ class MysqlStatsRepo implements StatsRepo {
     }
   }
 
-  async monthly(): Promise<MonthlyPoint[]> {
-    return MONTHLY_REFERENCE
+  async monthly(params?: StatsPeriod): Promise<MonthlyPoint[]> {
+    const dateWhere = this.statsDateWhere("date_debut", params)
+    const rows = (await this.pool.query(
+      `SELECT DATE_FORMAT(date_debut, '%Y-%m') AS mois_key, type_location, COUNT(*) AS n
+       FROM location
+       WHERE date_debut >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH) ${dateWhere}
+       GROUP BY mois_key, type_location
+       ORDER BY mois_key`,
+    )) as unknown as Row[]
+    const data = new Map<string, { courte: number; longue: number }>()
+    for (const row of rows) {
+      const key = String(row.mois_key)
+      let entry = data.get(key)
+      if (!entry) {
+        entry = { courte: 0, longue: 0 }
+        data.set(key, entry)
+      }
+      if (String(row.type_location) === "COURTE_DUREE") {
+        entry.courte = num(row.n)
+      } else {
+        entry.longue = num(row.n)
+      }
+    }
+    const stats: MonthlyPoint[] = []
+    const today = new Date()
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1)
+      const key = d.toISOString().slice(0, 7)
+      const label = new Intl.DateTimeFormat("fr-FR", { month: "short" }).format(d)
+      const entry = data.get(key) || { courte: 0, longue: 0 }
+      stats.push({ mois: label, courte: entry.courte, longue: entry.longue })
+    }
+    return stats
+  }
+
+  async daily(params?: StatsPeriod): Promise<DailyStat[]> {
+    const dateWhere = this.statsDateWhere("date_debut", params)
+    const rows = (await this.pool.query(
+      `SELECT DATE(date_debut) AS date, COALESCE(SUM(montant_total), 0) AS montant
+       FROM location
+       WHERE date_debut >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) ${dateWhere}
+       GROUP BY DATE(date_debut)
+       ORDER BY DATE(date_debut)`,
+    )) as unknown as Row[]
+    const byDate = new Map<string, number>()
+    for (const row of rows) {
+      byDate.set(String(row.date), num(row.montant))
+    }
+    const stats: DailyStat[] = []
+    const today = new Date()
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today)
+      d.setDate(today.getDate() - i)
+      const iso = d.toISOString().slice(0, 10)
+      stats.push({ date: iso, montant: byDate.get(iso) ?? 0 })
+    }
+    return stats
+  }
+
+  async fleetStatus(): Promise<FleetStatus> {
+    const rows = (await this.pool.query(
+      "SELECT statut, COUNT(*) AS n FROM vehicule GROUP BY statut",
+    )) as unknown as Row[]
+    const counts = new Map<string, number>()
+    for (const row of rows) {
+      counts.set(String(row.statut), num(row.n))
+    }
+    const disponible =
+      (counts.get("ENTREE_PARC") ?? 0) +
+      (counts.get("RETOUR_LOCATION") ?? 0) +
+      (counts.get("RETOUR_INTERNE") ?? 0) +
+      (counts.get("RETOUR_GARAGE") ?? 0)
+    return {
+      disponible,
+      enLocation: counts.get("MISE_EN_LOCATION") ?? 0,
+      entretien: counts.get("ENVOI_GARAGE") ?? 0,
+      indisponible:
+        (counts.get("SORTIE_INTERNE") ?? 0) +
+        (counts.get("SORTIE_DEFINITIVE") ?? 0) +
+        (counts.get("RESERVATION") ?? 0),
+    }
+  }
+
+  private statsDateWhere(column: string, params?: StatsPeriod): string {
+    const clauses: string[] = []
+    if (params?.debut) clauses.push(`${column} >= '${params.debut}'`)
+    if (params?.fin) clauses.push(`${column} <= '${params.fin}'`)
+    if (clauses.length === 0) return ""
+    return `AND ${clauses.join(" AND ")}`
   }
 }
 

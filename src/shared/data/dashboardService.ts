@@ -150,6 +150,18 @@ export interface ClientDetailDto extends ClientFicheDto {
   locations: LocationFicheDto[]
 }
 
+export interface DailyStat {
+  date: string
+  montant: number
+}
+
+export interface FleetStatus {
+  disponible: number
+  enLocation: number
+  entretien: number
+  indisponible: number
+}
+
 function normSpace(s: string): string {
   return s.replace(/[   ]/g, " ")
 }
@@ -345,8 +357,12 @@ export function filterTable(data: TableResult, query: string): TableResult {
   }
 }
 
-export async function fetchOverviewStats(): Promise<OverviewStats> {
-  return apiFetch<OverviewStats>("/api/stats/overview")
+export async function fetchOverviewStats(debut?: string, fin?: string): Promise<OverviewStats> {
+  const qs = new URLSearchParams()
+  if (debut) qs.set("debut", debut)
+  if (fin) qs.set("fin", fin)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  return apiFetch<OverviewStats>(`/api/stats/overview${suffix}`)
 }
 
 export async function fetchRecentLocations(limit = 3): Promise<TableResult> {
@@ -369,8 +385,28 @@ export async function fetchRecentLocations(limit = 3): Promise<TableResult> {
   }
 }
 
-export async function fetchMonthly(): Promise<MonthlyPoint[]> {
-  return apiFetch<MonthlyPoint[]>("/api/stats/monthly")
+export async function fetchMonthly(debut?: string, fin?: string): Promise<MonthlyPoint[]> {
+  const qs = new URLSearchParams()
+  if (debut) qs.set("debut", debut)
+  if (fin) qs.set("fin", fin)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  return apiFetch<MonthlyPoint[]>(`/api/stats/monthly${suffix}`)
+}
+
+export async function fetchDailyStats(debut?: string, fin?: string): Promise<DailyStat[]> {
+  const qs = new URLSearchParams()
+  if (debut) qs.set("debut", debut)
+  if (fin) qs.set("fin", fin)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  return apiFetch<DailyStat[]>(`/api/stats/daily${suffix}`)
+}
+
+export async function fetchFleetStatus(): Promise<FleetStatus> {
+  return apiFetch<FleetStatus>("/api/stats/fleet-status")
+}
+
+export async function fetchCommerciauxFiches(): Promise<CommercialFicheDto[]> {
+  return apiFetch<CommercialFicheDto[]>("/api/commerciaux")
 }
 
 export async function fetchClientFiche(id: number): Promise<ClientDetailDto> {

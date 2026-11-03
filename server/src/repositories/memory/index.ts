@@ -38,10 +38,13 @@ import type {
   ModeleVehiculeRepo,
   Maintenance,
   MaintenanceRepo,
+  DailyStat,
+  FleetStatus,
   MonthlyPoint,
   Mouvement,
   MouvementRepo,
   OverviewStats,
+  StatsPeriod,
   Repositories,
   Reservation,
   ReservationInput,
@@ -1075,28 +1078,43 @@ class MemoryVenteVehiculeRepo implements VenteVehiculeRepo {
 class MemoryStatsRepo implements StatsRepo {
   constructor(private data: SeedData) {}
 
-  async overview(): Promise<OverviewStats> {
-    const locations = this.data.locations
+  async overview(params?: StatsPeriod): Promise<OverviewStats> {
+    const locations = this.filterByPeriod(this.data.locations, params)
     const caTotal = locations.reduce((sum, l) => sum + l.montant, 0)
     const vehiculesDisponibles = this.data.vehicules.filter(
       (v) => v.statut === "ENTREE_PARC" || v.statut === "RETOUR_LOCATION" ||
         v.statut === "RETOUR_INTERNE" || v.statut === "RETOUR_GARAGE",
     ).length
-    const locationsActives = this.data.locations.filter((l) =>
+    const locationsActives = locations.filter((l) =>
       ACTIVE_LOCATION.includes(l.statut),
     ).length
-    const abouties = this.data.reservations.filter((r) => r.statut === "Aboutie").length
+    const abouties = this.filterByPeriod(this.data.reservations, params).filter((r) => r.statut === "Aboutie").length
     const round1 = (n: number): number => Math.round(n * 10) / 10
+    const now = Date.now()
+    const dayMs = 24 * 60 * 60 * 1000
+    const caCurr = this.filterByPeriod(this.data.locations, params).reduce((s, l) => {
+      const d = new Date(l.dateDebut).getTime()
+      return s + (d >= now - 30 * dayMs ? l.montant : 0)
+    }, 0)
+    const caPrev = this.filterByPeriod(this.data.locations, params).reduce((s, l) => {
+      const d = new Date(l.dateDebut).getTime()
+      return s + (d >= now - 60 * dayMs && d < now - 30 * dayMs ? l.montant : 0)
+    }, 0)
+    const caCroissance =
+      caPrev > 0
+        ? `${Math.round(((caCurr - caPrev) / caPrev) * 100)}%`
+        : caCurr > 0
+          ? "+100%"
+          : "0%"
     return {
       caTotal,
       devise: "FCFA",
-      caCroissance: "+12,6%",
+      caCroissance,
       vehiculesDisponibles,
       vehiculesTotal: this.data.vehicules.length,
       locationsActives,
-      reservationsEnAttente: this.data.reservations.filter((r) => r.statut === "En attente")
+      reservationsEnAttente: this.filterByPeriod(this.data.reservations, params).filter((r) => r.statut === "En attente")
         .length,
-      // Définitions : utilisation = actives / parc ; rotation = locations / véhicule.
       tauxUtilisation:
         this.data.vehicules.length > 0
           ? round1((locationsActives / this.data.vehicules.length) * 100)
@@ -1106,12 +1124,81 @@ class MemoryStatsRepo implements StatsRepo {
           ? round1(locations.length / this.data.vehicules.length)
           : 0,
       reservationsAbouties: abouties,
-      reservationsTotal: this.data.reservations.length,
+      reservationsTotal: this.filterByPeriod(this.data.reservations, params).length,
     }
   }
 
-  async monthly(): Promise<MonthlyPoint[]> {
-    return MONTHLY_REFERENCE
+  async monthly(params?: StatsPeriod): Promise<MonthlyPoint[]> {
+    const today = new Date()
+    const data = new Map<string, { mois: string; courte: number; longue: number }>()
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1)
+      const key = d.toISOString().slice(0, 7)
+      const label = new Intl.DateTimeFormat("fr-FR", { month: "short" }).format(d)
+      data.set(key, { mois: label, courte: 0, longue: 0 })
+    }
+    for (const loc of this.filterByPeriod(this.data.locations, params)) {
+      const key = new Date(loc.dateDebut).toISOString().slice(0, 7)
+      const entry = data.get(key)
+      if (entry) {
+        if (loc.type === "Courte durée") entry.courte += 1
+        else entry.longue += 1
+      }
+    }
+    return Array.from(data.values())
+  }
+
+  async daily(params?: StatsPeriod): Promise<DailyStat[]> {
+    const byDate = new Map<string, number>()
+    const today = new Date()
+    for (const loc of this.filterByPeriod(this.data.locations, params)) {
+      const date = String(loc.dateDebut).slice(0, 10)
+      byDate.set(date, (byDate.get(date) ?? 0) + loc.montant)
+    }
+    const stats: DailyStat[] = []
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today)
+      d.setDate(today.getDate() - i)
+      const iso = d.toISOString().slice(0, 10)
+      stats.push({ date: iso, montant: byDate.get(iso) ?? 0 })
+    }
+    return stats
+  }
+
+  async fleetStatus(): Promise<FleetStatus> {
+    const counts = new Map<string, number>()
+    for (const v of this.data.vehicules) {
+      counts.set(v.statut, (counts.get(v.statut) ?? 0) + 1)
+    }
+    const disponible =
+      (counts.get("ENTREE_PARC") ?? 0) +
+      (counts.get("RETOUR_LOCATION") ?? 0) +
+      (counts.get("RETOUR_INTERNE") ?? 0) +
+      (counts.get("RETOUR_GARAGE") ?? 0)
+    return {
+      disponible,
+      enLocation: counts.get("MISE_EN_LOCATION") ?? 0,
+      entretien: counts.get("ENVOI_GARAGE") ?? 0,
+      indisponible:
+        (counts.get("SORTIE_INTERNE") ?? 0) +
+        (counts.get("SORTIE_DEFINITIVE") ?? 0) +
+        (counts.get("RESERVATION") ?? 0),
+    }
+  }
+
+  private filterByPeriod<T extends { dateDebut?: string; dateDepart?: string }>(rows: T[], params?: StatsPeriod): T[] {
+    if (!params) return rows
+    const debut = params.debut ? new Date(params.debut).getTime() : null
+    const fin = params.fin ? new Date(params.fin).getTime() : null
+    if (!debut && !fin) return rows
+    return rows.filter((row) => {
+      const dateVal = row.dateDebut ?? row.dateDepart
+      if (!dateVal) return true
+      const t = new Date(dateVal).getTime()
+      if (debut && t < debut) return false
+      if (fin && t > fin) return false
+      return true
+    })
   }
 }
 

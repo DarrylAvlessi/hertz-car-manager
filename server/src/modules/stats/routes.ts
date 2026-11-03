@@ -11,16 +11,32 @@ export function statsRouter(repos: Repositories, env: Env): Router {
   router.get(
     "/overview",
     guard,
-    asyncHandler(async (_req, res) => {
-      res.json(await repos.stats.overview())
+    asyncHandler(async (req, res) => {
+      res.json(await repos.stats.overview({ debut: req.query.debut as string, fin: req.query.fin as string }))
     }),
   )
 
   router.get(
     "/monthly",
     guard,
+    asyncHandler(async (req, res) => {
+      res.json(await repos.stats.monthly({ debut: req.query.debut as string, fin: req.query.fin as string }))
+    }),
+  )
+
+  router.get(
+    "/daily",
+    guard,
+    asyncHandler(async (req, res) => {
+      res.json(await repos.stats.daily({ debut: req.query.debut as string, fin: req.query.fin as string }))
+    }),
+  )
+
+  router.get(
+    "/fleet-status",
+    guard,
     asyncHandler(async (_req, res) => {
-      res.json(await repos.stats.monthly())
+      res.json(await repos.stats.fleetStatus())
     }),
   )
 

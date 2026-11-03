@@ -360,6 +360,18 @@ export interface MonthlyPoint {
   longue: number
 }
 
+export interface DailyStat {
+  date: string
+  montant: number
+}
+
+export interface FleetStatus {
+  disponible: number
+  enLocation: number
+  entretien: number
+  indisponible: number
+}
+
 // --- Contrats repositories (implémentés en memory/ et mysql/) ---
 
 export interface AdminRepo {
@@ -593,9 +605,16 @@ export interface VenteVehiculeRepo {
   isMovementLinked(movementId: number): Promise<boolean>
 }
 
+export interface StatsPeriod {
+  debut?: string
+  fin?: string
+}
+
 export interface StatsRepo {
-  overview(): Promise<OverviewStats>
-  monthly(): Promise<MonthlyPoint[]>
+  overview(params?: StatsPeriod): Promise<OverviewStats>
+  monthly(params?: StatsPeriod): Promise<MonthlyPoint[]>
+  daily(params?: StatsPeriod): Promise<DailyStat[]>
+  fleetStatus(): Promise<FleetStatus>
 }
 
 export interface Repositories {
