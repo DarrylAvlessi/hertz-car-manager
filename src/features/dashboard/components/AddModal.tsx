@@ -5,6 +5,7 @@ import type { FormEvent } from "react"
 import { createPortal } from "react-dom"
 
 import { apiFetch } from "@/shared/api/client"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
 import type { DashboardModule } from "@/shared/data/types"
 
@@ -58,9 +59,6 @@ function nextDate(dateValue: string): string {
   return localDate(date)
 }
 
-const fieldClass =
-  "w-full rounded-lg border border-slate-300 px-3 py-2 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
-
 export default function AddModal({
   module,
 
@@ -110,9 +108,25 @@ export default function AddModal({
 
   const [commercialId, setCommercialId] = useState("")
 
-  const [dateStart, setDateStart] = useState(() => localDate())
+  const [dateReservation, setDateReservation] = useState(() => localDate())
 
-  const [dateEnd, setDateEnd] = useState(() => nextDate(localDate()))
+  const [dateStart, setDateStart] = useState(() =>
+    module === "Réservations" ? "" : localDate(),
+  )
+
+  const [dateEnd, setDateEnd] = useState(() =>
+    module === "Réservations" ? "" : nextDate(localDate()),
+  )
+
+  const [mission, setMission] = useState("")
+
+  const [missionPlace, setMissionPlace] = useState("")
+
+  const [confirmationStatus, setConfirmationStatus] = useState("")
+
+  const [billingStatus, setBillingStatus] = useState("NON_FACTUREE")
+
+  const [paymentStatus, setPaymentStatus] = useState("NON_PAYEE")
 
   const [rentalType, setRentalType] = useState<RentalType>("Courte durée")
 
@@ -285,27 +299,51 @@ export default function AddModal({
           body: { nom, prenom, abreviation, telephone, email },
         })
       } else if (isReservation || isLocation) {
-        if (!availability?.disponible) {
+        if (isReservation && Boolean(dateStart) !== Boolean(dateEnd)) {
           throw new Error(
-            availabilityError ??
-              availability?.motif ??
-              "La disponibilité du véhicule doit être confirmée avant l’enregistrement.",
+            "Renseignez les deux dates prévues ou laissez-les toutes les deux vides.",
+          )
+        }
+
+        if (isLocation || (dateStart && dateEnd)) {
+          if (!availability?.disponible) {
+            throw new Error(
+              availabilityError ??
+                availability?.motif ??
+                "La disponibilité du véhicule doit être confirmée avant l’enregistrement.",
+            )
+          }
+        }
+
+        if (isLocation && (!clientId || !commercialId)) {
+          throw new Error(
+            "Un client et un commercial sont obligatoires pour créer une location.",
           )
         }
 
         const associations = {
-          clientId: Number(clientId),
+          clientId: clientId ? Number(clientId) : null,
 
           vehiculeId: Number(vehicleId),
 
-          commercialId: Number(commercialId),
+          commercialId: commercialId ? Number(commercialId) : null,
         }
 
         if (isReservation) {
           await apiFetch("/api/reservations", {
             method: "POST",
 
-            body: { ...associations, dateDepart: dateStart, dateFin: dateEnd },
+            body: {
+              ...associations,
+              dateReservation: dateReservation || null,
+              dateDepart: dateStart || null,
+              dateFin: dateEnd || null,
+              mission: mission.trim() || null,
+              lieuMission: missionPlace.trim() || null,
+              statutConfirmation: confirmationStatus.trim() || null,
+              statutFacturation: billingStatus,
+              statutPaiement: paymentStatus,
+            },
           })
         } else {
           await apiFetch("/api/locations", {
@@ -330,6 +368,9 @@ export default function AddModal({
         )
       }
 
+      notifyDashboardMutation(
+        `${isReservation ? "Réservation" : isLocation ? "Location" : isCommercial ? "Commercial" : "Client"} enregistré${isReservation || isLocation ? "e" : ""} avec succès.`,
+      )
       onCreated?.()
 
       close()
@@ -345,67 +386,47 @@ export default function AddModal({
   }
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
-      onClick={closeIfIdle}
-    >
-      <div
-        className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+    <div className="modal-backdrop" onClick={closeIfIdle}>
+      <form
+        className="modal location-modal"
         onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-600">
-              Hertz Bénin
-            </p>
-            <h3 className="mt-2 text-xl font-semibold text-slate-900">
-              {title}
-            </h3>
-          </div>
-          <button
-            type="button"
-            className="text-lg text-slate-500 disabled:opacity-50"
-            onClick={closeIfIdle}
-            disabled={loading}
-            aria-label="Fermer"
-          >
-            ×
-          </button>
-        </div>
-
-        <form className="space-y-4" onSubmit={submit}>
+        <button
+          type="button"
+          className="modal-close"
+          onClick={closeIfIdle}
+          disabled={loading}
+          aria-label="Fermer"
+        >
+          ×
+        </button>
+        <p className="kicker">HERTZ BÉNIN</p>
+        <h2>{title}</h2>
+        <div className="modal-fields">
           {(isClient || isCommercial) && (
             <>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  {isClient ? "Nom de famille" : "Nom"}
-                </span>
+              <label>
+                <span>{isClient ? "Nom de famille" : "Nom"}</span>
                 <input
-                  className={fieldClass}
                   value={nom}
                   onChange={(e) => setNom(e.target.value)}
                   placeholder={isClient ? "Nom du client" : "Nom du commercial"}
                   required
                 />
               </label>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Prénom
-                </span>
+              <label>
+                <span>Prénom</span>
                 <input
-                  className={fieldClass}
                   value={prenom}
                   onChange={(e) => setPrenom(e.target.value)}
                   autoComplete="given-name"
                 />
               </label>
               {isClient && (
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Type
-                  </span>
+                <label>
+                  <span>Type</span>
                   <select
-                    className={fieldClass}
                     value={type}
                     onChange={(e) => setType(e.target.value)}
                   >
@@ -416,24 +437,18 @@ export default function AddModal({
                 </label>
               )}
               {isCommercial && (
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Abréviation
-                  </span>
+                <label>
+                  <span>Abréviation</span>
                   <input
-                    className={fieldClass}
                     value={abreviation}
                     onChange={(e) => setAbreviation(e.target.value)}
                     maxLength={10}
                   />
                 </label>
               )}
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Téléphone
-                </span>
+              <label>
+                <span>Téléphone</span>
                 <input
-                  className={fieldClass}
                   value={telephone}
                   onChange={(e) => setTelephone(e.target.value)}
                   placeholder="+229 ..."
@@ -441,12 +456,9 @@ export default function AddModal({
                   autoComplete="tel"
                 />
               </label>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  E-mail
-                </span>
+              <label>
+                <span>E-mail</span>
                 <input
-                  className={fieldClass}
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -455,23 +467,17 @@ export default function AddModal({
               </label>
               {isClient && (
                 <>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Adresse
-                    </span>
+                  <label>
+                    <span>Adresse</span>
                     <input
-                      className={fieldClass}
                       value={adresse}
                       onChange={(e) => setAdresse(e.target.value)}
                       autoComplete="street-address"
                     />
                   </label>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Numéro de permis
-                    </span>
+                  <label>
+                    <span>Numéro de permis</span>
                     <input
-                      className={fieldClass}
                       value={numPermis}
                       onChange={(e) => setNumPermis(e.target.value)}
                     />
@@ -494,16 +500,13 @@ export default function AddModal({
                 </p>
               )}
 
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Client
-                </span>
+              <label>
+                <span>Client</span>
                 <select
-                  className={fieldClass}
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
-                  required
-                  disabled={optionsLoading || clients.length === 0}
+                  required={isLocation}
+                  disabled={optionsLoading || (!isReservation && clients.length === 0)}
                 >
                   <option value="">Sélectionner un client</option>
                   {clients.map((client) => (
@@ -514,12 +517,9 @@ export default function AddModal({
                 </select>
               </label>
 
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Véhicule
-                </span>
+              <label>
+                <span>Véhicule</span>
                 <select
-                  className={fieldClass}
                   value={vehicleId}
                   onChange={(e) => {
                     setVehicleId(e.target.value)
@@ -532,7 +532,9 @@ export default function AddModal({
                   disabled={optionsLoading || vehicles.length === 0}
                 >
                   <option value="">Sélectionner un véhicule</option>
-                  {vehicles.map((vehicle) => (
+                  {vehicles
+                    .filter((vehicle) => vehicle.statut !== "SORTIE_DEFINITIVE")
+                    .map((vehicle) => (
                     <option key={vehicle.id} value={vehicle.id}>
                       {vehicle.immatriculation} · {vehicle.marqueModele} (
                       {vehicle.statut})
@@ -541,16 +543,15 @@ export default function AddModal({
                 </select>
               </label>
 
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">
-                  Commercial
-                </span>
+              <label>
+                <span>Commercial</span>
                 <select
-                  className={fieldClass}
                   value={commercialId}
                   onChange={(e) => setCommercialId(e.target.value)}
-                  required
-                  disabled={optionsLoading || commercials.length === 0}
+                  required={isLocation}
+                  disabled={
+                    optionsLoading || (!isReservation && commercials.length === 0)
+                  }
                 >
                   <option value="">Sélectionner un commercial</option>
                   {commercials.map((commercial) => (
@@ -562,13 +563,49 @@ export default function AddModal({
                 </select>
               </label>
 
+              {isReservation && (
+                <>
+                  <label>
+                    <span>Date de réservation</span>
+                    <input
+                      type="date"
+                      value={dateReservation}
+                      onChange={(e) => setDateReservation(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Mission</span>
+                    <input
+                      value={mission}
+                      onChange={(e) => setMission(e.target.value)}
+                      maxLength={150}
+                    />
+                  </label>
+                  <label>
+                    <span>Lieu de la mission</span>
+                    <input
+                      value={missionPlace}
+                      onChange={(e) => setMissionPlace(e.target.value)}
+                      maxLength={150}
+                    />
+                  </label>
+                  <label>
+                    <span>Confirmation</span>
+                    <input
+                      value={confirmationStatus}
+                      onChange={(e) => setConfirmationStatus(e.target.value)}
+                      maxLength={80}
+                    />
+                  </label>
+                </>
+              )}
+
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    {isReservation ? "Date de départ" : "Date de début"}
+                <label>
+                  <span>
+                    {isReservation ? "Date de départ prévue" : "Date de début"}
                   </span>
                   <input
-                    className={fieldClass}
                     type="date"
                     value={dateStart}
                     onChange={(e) => {
@@ -578,15 +615,14 @@ export default function AddModal({
 
                       setAvailabilityError(null)
                     }}
-                    required
+                    required={isLocation}
                   />
                 </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Date de fin
+                <label>
+                  <span>
+                    {isReservation ? "Date de retour prévue" : "Date de fin"}
                   </span>
                   <input
-                    className={fieldClass}
                     type="date"
                     value={dateEnd}
                     min={dateStart}
@@ -597,19 +633,47 @@ export default function AddModal({
 
                       setAvailabilityError(null)
                     }}
-                    required
+                    required={isLocation}
                   />
                 </label>
               </div>
 
+              {isReservation && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <label>
+                    <span>Facturation</span>
+                    <select
+                      value={billingStatus}
+                      onChange={(e) => setBillingStatus(e.target.value)}
+                    >
+                      <option value="NON_FACTUREE">Non facturée</option>
+                      <option value="EN_ATTENTE_BON_COMMANDE">
+                        En attente de bon de commande
+                      </option>
+                      <option value="FACTURE_EMISE_PAIEMENT_EN_ATTENTE">
+                        Facture émise, paiement en attente
+                      </option>
+                      <option value="PAIEMENT_EFFECTUE">Paiement effectué</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Paiement</span>
+                    <select
+                      value={paymentStatus}
+                      onChange={(e) => setPaymentStatus(e.target.value)}
+                    >
+                      <option value="NON_PAYEE">Non payée</option>
+                      <option value="PAYEE">Payée</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+
               {isLocation && (
                 <>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Type de location
-                    </span>
+                  <label>
+                    <span>Type de location</span>
                     <select
-                      className={fieldClass}
                       value={rentalType}
                       onChange={(e) =>
                         setRentalType(e.target.value as RentalType)
@@ -619,12 +683,9 @@ export default function AddModal({
                       <option value="Longue durée">Longue durée</option>
                     </select>
                   </label>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Montant total (FCFA)
-                    </span>
+                  <label>
+                    <span>Montant total (FCFA)</span>
                     <input
-                      className={fieldClass}
                       type="number"
                       min="0"
                       step="1"
@@ -663,52 +724,47 @@ export default function AddModal({
 
               {!optionsLoading &&
                 !optionsError &&
-                (clients.length === 0 ||
-                  vehicles.length === 0 ||
-                  commercials.length === 0) && (
+                (vehicles.length === 0 ||
+                  (!isReservation &&
+                    (clients.length === 0 || commercials.length === 0))) && (
                   <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    Ajoutez au moins un client, un véhicule et un commercial
-                    avant de créer cet enregistrement.
+                    {isReservation
+                      ? "Ajoutez au moins un véhicule avant de créer une réservation."
+                      : "Ajoutez au moins un client, un véhicule et un commercial avant de créer cet enregistrement."}
                   </p>
                 )}
             </>
           )}
-
-          {error && (
-            <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {error}
-            </p>
-          )}
-
-          <div className="mt-6 flex justify-end gap-3">
-            <button
-              type="button"
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
-              onClick={closeIfIdle}
-              disabled={loading}
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={
-                loading ||
-                optionsLoading ||
-                (needsAssociations &&
-                  (Boolean(optionsError) ||
-                    clients.length === 0 ||
-                    vehicles.length === 0 ||
-                    commercials.length === 0 ||
-                    availabilityChecking ||
-                    availability?.disponible !== true))
-              }
-            >
-              {loading ? "Enregistrement…" : "Enregistrer"}
-            </button>
-          </div>
-        </form>
-      </div>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button
+            type="button"
+            className="secondary"
+            onClick={closeIfIdle}
+            disabled={loading}
+          >
+            Annuler
+          </button>
+          <button
+            type="submit"
+            className="primary small"
+            disabled={
+              loading ||
+              optionsLoading ||
+              (needsAssociations &&
+                (Boolean(optionsError) ||
+                vehicles.length === 0 ||
+                (!isReservation &&
+                  (clients.length === 0 || commercials.length === 0)) ||
+                ((isLocation || Boolean(dateStart && dateEnd)) &&
+                  (availabilityChecking || availability?.disponible !== true))))
+            }
+          >
+            {loading ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+      </form>
     </div>,
 
     document.body,

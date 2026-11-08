@@ -220,13 +220,10 @@ CREATE TABLE IF NOT EXISTS vehicule (
 -- 4. RÉSERVATIONS ET AFFAIRES PERDUES
 -- =====================================================================================
 
--- Une ligne = une ligne du fichier « RESA ». Les 3 colonnes de statut du fichier sont conservées :
---   Statut de confirmation -> statut + statut_paiement
---   Statut de la facturation -> statut_facturation
---   Statut de la résa (à venir / en cours / terminée) -> CALCULÉ (vue v_etat_reservations)
+-- Une ligne = une ligne du fichier « RESA ». Les statuts suivent le cycle de vie de la réservation.
 CREATE TABLE IF NOT EXISTS reservation (
   id_reservation      INT AUTO_INCREMENT PRIMARY KEY,
-  date_reservation    DATE NOT NULL DEFAULT (CURRENT_DATE),
+  date_reservation    DATE NULL DEFAULT (CURRENT_DATE),
   date_debut_prevue   DATE NULL,
   date_fin_prevue     DATE NULL,
   duree_jours         INT GENERATED ALWAYS AS (
@@ -234,8 +231,8 @@ CREATE TABLE IF NOT EXISTS reservation (
                              ELSE GREATEST(DATEDIFF(date_fin_prevue, date_debut_prevue), 1) END) STORED,
   mission             VARCHAR(150) NULL,              -- LOCATION, transfert, sponsor, LLD...
   lieu_mission        VARCHAR(150) NULL,              -- COTONOU, PARAKOU, LOME...
-  statut              ENUM('EN_ATTENTE','CONFIRMEE','REPORTEE','TRANSFORMEE_EN_LOCATION','ANNULEE','EXPIREE')
-                      NOT NULL DEFAULT 'EN_ATTENTE',
+  statut              ENUM('A_VENIR','EN_COURS','TERMINEE','ANNULEE')
+                      NOT NULL DEFAULT 'A_VENIR',
   statut_paiement     ENUM('NON_PAYEE','PAYEE') NOT NULL DEFAULT 'NON_PAYEE',
   statut_facturation  ENUM('NON_FACTUREE','EN_ATTENTE_BON_COMMANDE','FACTURE_EMISE_PAIEMENT_EN_ATTENTE','PAIEMENT_EFFECTUE')
                       NOT NULL DEFAULT 'NON_FACTUREE',
@@ -243,10 +240,14 @@ CREATE TABLE IF NOT EXISTS reservation (
   ref_bon_commande    VARCHAR(50) NULL,
   id_motif_non_aboutissement INT NULL,
   detail_non_aboutissement   VARCHAR(255) NULL,
+  statut_confirmation_import VARCHAR(80) NULL,
+  client_import       VARCHAR(180) NULL,
+  commercial_import   VARCHAR(180) NULL,
+  duree_jours_import  INT NULL,
   date_creation       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  id_client           INT NOT NULL,
+  id_client           INT NULL,
   id_vehicule         INT NOT NULL,
-  id_commercial       INT NOT NULL,
+  id_commercial       INT NULL,
   id_agence           INT NULL,                       -- par défaut : agence du commercial
   CONSTRAINT fk_resa_agence     FOREIGN KEY (id_agence)     REFERENCES agence(id_agence),
   CONSTRAINT fk_resa_client     FOREIGN KEY (id_client)     REFERENCES client(id_client),
@@ -254,7 +255,6 @@ CREATE TABLE IF NOT EXISTS reservation (
   CONSTRAINT fk_resa_commercial FOREIGN KEY (id_commercial) REFERENCES commercial(id_commercial),
   CONSTRAINT fk_resa_motif      FOREIGN KEY (id_motif_non_aboutissement) REFERENCES motif_non_aboutissement(id_motif),
   CONSTRAINT ck_resa_dates CHECK (date_fin_prevue IS NULL OR date_debut_prevue IS NULL OR date_fin_prevue >= date_debut_prevue),
-  CONSTRAINT ck_resa_dates_requises CHECK (date_debut_prevue IS NOT NULL OR statut IN ('EN_ATTENTE','ANNULEE','EXPIREE')),
   INDEX idx_resa_vehicule_dates (id_vehicule, date_debut_prevue, date_fin_prevue),
   INDEX idx_resa_client (id_client),
   INDEX idx_resa_commercial (id_commercial),
@@ -285,9 +285,10 @@ CREATE TABLE IF NOT EXISTS affaire_perdue (
   vehicule_demande  VARCHAR(120) NULL,
   vehicule_propose  VARCHAR(120) NULL,
   montant_estime    DECIMAL(14,2) NULL CHECK (montant_estime IS NULL OR montant_estime >= 0),
-  id_client         INT NOT NULL,
-  id_commercial     INT NOT NULL,
+  id_client         INT NULL,
+  id_commercial     INT NULL,
   id_reservation    INT NULL,                         -- si l'affaire est issue d'une réservation
+  UNIQUE KEY uq_affaire_reservation (id_reservation),
   CONSTRAINT fk_affaire_client     FOREIGN KEY (id_client)      REFERENCES client(id_client),
   CONSTRAINT fk_affaire_commercial FOREIGN KEY (id_commercial)  REFERENCES commercial(id_commercial),
   CONSTRAINT fk_affaire_motif      FOREIGN KEY (id_motif)       REFERENCES motif_non_aboutissement(id_motif),
@@ -332,6 +333,12 @@ CREATE TABLE IF NOT EXISTS location (
   mission             VARCHAR(150) NULL,
   ref_bon_commande    VARCHAR(50)  NULL,
   observation         VARCHAR(255) NULL,
+  -- Keep the source spreadsheet's billing/payment labels, including incomplete historical values.
+  mode_paiement_import       VARCHAR(80) NULL,
+  reference_facture_import   VARCHAR(30) NULL,
+  date_facturation_import    DATE NULL,
+  date_paiement_import       DATE NULL,
+  paye_import                VARCHAR(10) NULL,
   id_lieu_depart      INT NULL,
   id_lieu_retour      INT NULL,
   id_agence           INT NULL,                       -- par défaut : agence du commercial
@@ -477,9 +484,9 @@ CREATE TABLE IF NOT EXISTS garage (
 CREATE TABLE IF NOT EXISTS passage_garage (
   id_passage                INT AUTO_INCREMENT PRIMARY KEY,
   type_passage              ENUM('REPARATION','REVISION','ENTRETIEN','VISITE_TECHNIQUE','AUTRE') NOT NULL DEFAULT 'REPARATION',
-  date_entree               DATE NOT NULL,
-  date_sortie_prevue        DATE NULL,
-  date_sortie_reelle        DATE NULL,
+  date_entree               DATETIME NOT NULL,
+  date_sortie_prevue        DATETIME NULL,
+  date_sortie_reelle        DATETIME NULL,
   km_entree                 INT  NULL,
   motif                     VARCHAR(255) NULL,
   statut                    ENUM('EN_ATTENTE','EN_COURS','TERMINEE') NOT NULL DEFAULT 'EN_COURS',
@@ -572,12 +579,29 @@ CREATE TABLE IF NOT EXISTS mouvement_vehicule (
   INDEX idx_mvt_location (id_location),
   INDEX idx_mvt_passage (id_passage)
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS sortie_interne (
+  id_sortie              INT AUTO_INCREMENT PRIMARY KEY,
+  id_mouvement_depart    INT NOT NULL UNIQUE,
+  id_mouvement_retour    INT NULL UNIQUE,
+  id_commercial          INT NOT NULL,
+  motif                  VARCHAR(255) NOT NULL,
+  date_depart            DATETIME NOT NULL,
+  date_retour            DATETIME NULL,
+  CONSTRAINT fk_sortie_interne_depart FOREIGN KEY (id_mouvement_depart)
+    REFERENCES mouvement_vehicule(id_mouvement) ON DELETE CASCADE,
+  CONSTRAINT fk_sortie_interne_retour FOREIGN KEY (id_mouvement_retour)
+    REFERENCES mouvement_vehicule(id_mouvement) ON DELETE SET NULL,
+  CONSTRAINT fk_sortie_interne_commercial FOREIGN KEY (id_commercial)
+    REFERENCES commercial(id_commercial),
+  INDEX idx_sortie_interne_dates (date_depart, date_retour)
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS vente_vehicule (
   id_vente              INT AUTO_INCREMENT PRIMARY KEY,
   numero_vente          VARCHAR(30) NOT NULL UNIQUE,
   id_vehicule           INT NOT NULL,
   id_acheteur           INT NOT NULL,
-  date_vente            DATE NOT NULL,
+  date_vente            DATETIME NOT NULL,
   prix_vente            DECIMAL(14,2) NOT NULL CHECK (prix_vente >= 0),
   devise                CHAR(3) NOT NULL DEFAULT 'XOF',
   frais_vente           DECIMAL(14,2) NOT NULL DEFAULT 0 CHECK (frais_vente >= 0),
@@ -586,7 +610,7 @@ CREATE TABLE IF NOT EXISTS vente_vehicule (
   kilometrage_vente     INT NOT NULL CHECK (kilometrage_vente >= 0),
   canal_vente           ENUM('PARTICULIER','GARAGE_PROFESSIONNEL','ENCHERES','CLIENT_LOCATION','APPEL_OFFRES','AUTRE') NULL,
   statut_paiement       ENUM('NON_PAYEE','PARTIELLE','PAYEE') NOT NULL DEFAULT 'NON_PAYEE',
-  date_remise_vehicule  DATE NULL,
+  date_remise_vehicule  DATETIME NULL,
   reference_cession     VARCHAR(60) NULL,
   statut                ENUM('CONCLUE','ANNULEE') NOT NULL DEFAULT 'CONCLUE',
   date_annulation       DATE NULL,
@@ -645,6 +669,8 @@ CREATE TABLE IF NOT EXISTS contravention (
   id_location            INT NULL,
   id_mouvement           INT NULL,                        -- sortie pendant laquelle l'infraction a eu lieu
   id_commercial          INT NULL,                        -- « Agent de vente »
+  client_import          VARCHAR(180) NULL,
+  commercial_import      VARCHAR(180) NULL,
   CONSTRAINT fk_contrav_type       FOREIGN KEY (id_type_contravention) REFERENCES type_contravention(id_type_contravention),
   CONSTRAINT fk_contrav_vehicule   FOREIGN KEY (id_vehicule)   REFERENCES vehicule(id_vehicule),
   CONSTRAINT fk_contrav_client     FOREIGN KEY (id_client)     REFERENCES client(id_client) ON DELETE SET NULL,
@@ -767,7 +793,7 @@ END//
 CREATE TRIGGER trg_location_ai AFTER INSERT ON location FOR EACH ROW
 BEGIN
   IF NEW.id_reservation IS NOT NULL THEN
-    UPDATE reservation SET statut = 'TRANSFORMEE_EN_LOCATION' WHERE id_reservation = NEW.id_reservation;
+    UPDATE reservation SET statut = 'EN_COURS' WHERE id_reservation = NEW.id_reservation;
   END IF;
   IF COALESCE(@import_historique, 0) = 0 THEN
     INSERT INTO mouvement_vehicule (type_mouvement, motif, date_mouvement, date_retour_prevue, kilometrage,
@@ -787,6 +813,10 @@ END//
 CREATE TRIGGER trg_location_au AFTER UPDATE ON location FOR EACH ROW
 BEGIN
   DECLARE v_depart INT;
+  IF OLD.date_retour_reelle IS NULL AND NEW.date_retour_reelle IS NOT NULL
+     AND NEW.id_reservation IS NOT NULL THEN
+    UPDATE reservation SET statut = 'TERMINEE' WHERE id_reservation = NEW.id_reservation;
+  END IF;
   IF OLD.date_retour_reelle IS NULL AND NEW.date_retour_reelle IS NOT NULL
      AND COALESCE(@import_historique, 0) = 0 THEN
     SELECT id_mouvement INTO v_depart FROM mouvement_vehicule
@@ -1160,35 +1190,28 @@ SELECT v.id_vehicule, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehi
  WHERE v.statut IN ('ENTREE_PARC','RETOUR_LOCATION','RETOUR_INTERNE','RETOUR_GARAGE')
    AND NOT EXISTS (SELECT 1 FROM reservation r
                     WHERE r.id_vehicule = v.id_vehicule
-                      AND r.statut IN ('CONFIRMEE','EN_ATTENTE')
+                      AND r.statut IN ('A_VENIR','EN_COURS')
                       AND CURRENT_DATE BETWEEN r.date_debut_prevue AND r.date_fin_prevue);
 
 -- ---- Réservations : état calculé (équivalent de « Statut de la résa » du fichier RESA) -----
 CREATE OR REPLACE VIEW v_etat_reservations AS
 SELECT r.id_reservation, r.date_reservation, r.date_debut_prevue, r.date_fin_prevue, r.duree_jours,
        v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
-       CONCAT_WS(' ', c.prenom, c.nom) AS client,
+       COALESCE(NULLIF(CONCAT_WS(' ', c.prenom, c.nom), ''), r.client_import, '') AS client,
        CONCAT_WS(' ', co.prenom, co.nom) AS agent_de_vente,
-       r.mission, r.lieu_mission, r.statut AS statut_confirmation, r.statut_paiement, r.statut_facturation,
-       CASE
-         WHEN r.statut IN ('ANNULEE','EXPIREE')   THEN 'ANNULEE'
-         WHEN l.statut = 'TERMINEE'               THEN 'TERMINEE'
-         WHEN l.id_location IS NOT NULL           THEN 'LOCATION_EN_COURS'
-         WHEN r.statut = 'REPORTEE'               THEN 'REPORTEE'
-         WHEN r.date_debut_prevue > CURRENT_DATE  THEN 'RESA_A_VENIR'
-         ELSE 'A_TRAITER'
-       END AS etat_resa,
+       r.mission, r.lieu_mission, r.statut, r.statut_paiement, r.statut_facturation,
+       r.statut AS etat_resa,
        (l.id_location IS NOT NULL) AS aboutie
   FROM reservation r
   JOIN vehicule v   ON v.id_vehicule = r.id_vehicule
-  JOIN client c     ON c.id_client = r.id_client
-  JOIN commercial co ON co.id_commercial = r.id_commercial
+  LEFT JOIN client c     ON c.id_client = r.id_client
+  LEFT JOIN commercial co ON co.id_commercial = r.id_commercial
   LEFT JOIN location l ON l.id_reservation = r.id_reservation;
 
 -- Équivalent de l'en-tête du fichier RESA : « Résa à venir / En cours / Terminée / Annulée »
 CREATE OR REPLACE VIEW v_synthese_reservations AS
-SELECT SUM(etat_resa = 'RESA_A_VENIR')      AS resa_a_venir,
-       SUM(etat_resa = 'LOCATION_EN_COURS') AS en_cours,
+SELECT SUM(etat_resa = 'A_VENIR')           AS resa_a_venir,
+       SUM(etat_resa = 'EN_COURS')          AS en_cours,
        SUM(etat_resa = 'TERMINEE')          AS terminees,
        SUM(etat_resa = 'ANNULEE')           AS annulees,
        COUNT(*)                             AS total
@@ -1226,7 +1249,7 @@ SELECT COALESCE(SUM(montant), 0)                                                
 CREATE OR REPLACE VIEW v_contraventions_detail AS
 SELECT c.id_contravention, c.numero_contravention, t.libelle AS contravention, c.date_infraction,
        c.montant, c.frais, v.immatriculation, CONCAT(v.marque, ' ', v.modele) AS vehicule,
-       cl.nom AS client, CONCAT_WS(' ', co.prenom, co.nom) AS agent_de_vente,
+       CONCAT_WS(' ', cl.prenom, cl.nom) AS client, CONCAT_WS(' ', co.prenom, co.nom) AS agent_de_vente,
        c.statut_paiement, c.date_reglement, c.moyen_paiement, c.numero_quittance, c.payeur,
        c.statut_recouvrement, c.date_recouvrement, c.montant_recouvre, c.id_location
   FROM contravention c
@@ -1250,7 +1273,7 @@ SELECT DATE_FORMAT(date_paiement, '%Y-%m') AS mois, moyen_paiement, COUNT(*) AS 
 CREATE OR REPLACE VIEW v_factures_impayees AS
 SELECT f.id_facture, f.numero_facture, f.date_emission, f.date_echeance, f.montant_ttc,
        COALESCE(p.paye, 0) AS deja_paye, f.montant_ttc - COALESCE(p.paye, 0) AS reste_a_payer,
-       cl.nom AS client
+       CONCAT_WS(' ', cl.prenom, cl.nom) AS client
   FROM facture f
   JOIN client cl ON cl.id_client = f.id_client
   LEFT JOIN (SELECT id_facture, SUM(montant) AS paye FROM paiement WHERE id_facture IS NOT NULL GROUP BY id_facture) p
@@ -1281,7 +1304,7 @@ SELECT DATE_FORMAT(l.date_debut, '%Y-%m') AS mois, COUNT(*) AS nb_locations,
 
 -- Reproduit le tableau Excel « Location » (une ligne par location)
 CREATE OR REPLACE VIEW v_tableau_locations AS
-SELECT l.id_location, cl.nom AS nom_du_client, v.immatriculation AS immat_vehicule,
+SELECT l.id_location, CONCAT_WS(' ', cl.prenom, cl.nom) AS nom_du_client, v.immatriculation AS immat_vehicule,
        DATE(l.date_debut) AS debut, DATE(l.date_fin_prevue) AS fin, l.duree_jours AS duree,
        l.type_location,
        (SELECT GROUP_CONCAT(DISTINCT p.moyen_paiement) FROM paiement p
@@ -1313,7 +1336,7 @@ SELECT t.*, ROUND(100 * t.nb_reservations_abouties / NULLIF(t.nb_reservations, 0
                (SELECT COUNT(*) FROM reservation r JOIN location l ON l.id_reservation = r.id_reservation
                  WHERE r.id_commercial = c.id_commercial) AS nb_reservations_abouties,
                (SELECT COUNT(*) FROM reservation r
-                 WHERE r.id_commercial = c.id_commercial AND r.statut IN ('ANNULEE','EXPIREE')) AS nb_reservations_non_abouties,
+                 WHERE r.id_commercial = c.id_commercial AND r.statut = 'ANNULEE') AS nb_reservations_non_abouties,
                (SELECT COUNT(*) FROM affaire_perdue a WHERE a.id_commercial = c.id_commercial) AS nb_affaires_perdues,
                (SELECT COUNT(*) FROM location l WHERE l.id_commercial = c.id_commercial) AS nb_locations,
                (SELECT COALESCE(SUM(l.montant_total), 0) FROM location l WHERE l.id_commercial = c.id_commercial) AS montant_locations,

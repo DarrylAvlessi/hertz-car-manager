@@ -10,6 +10,18 @@ const icons: Record<string, ReactNode> = {
     </>
   ),
 
+  agency: (
+    <>
+      <path d="M3 21h18M5 21V7l7-4 7 4v14M9 10h1M14 10h1M9 14h1M14 14h1M10 21v-3h4v3" />
+    </>
+  ),
+
+  center: (
+    <>
+      <path d="M4 21V5h16v16M2 21h20M8 9h2M14 9h2M8 13h2M14 13h2M10 21v-4h4v4" />
+    </>
+  ),
+
   sellers: (
     <>
       <circle cx="9" cy="8" r="3" />
@@ -38,10 +50,24 @@ const icons: Record<string, ReactNode> = {
     </>
   ),
 
+  ticket: (
+    <>
+      <path d="M4 5h16v4a3 3 0 0 0 0 6v4H4v-4a3 3 0 0 0 0-6V5Z" />
+      <path d="M13 5v2M13 11v2M13 17v2" />
+    </>
+  ),
+
   client: (
     <>
       <circle cx="12" cy="8" r="4" />
       <path d="M4 21a8 8 0 0 1 16 0" />
+    </>
+  ),
+
+  driver: (
+    <>
+      <circle cx="12" cy="8" r="3" />
+      <path d="M5 21a7 7 0 0 1 14 0M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0Z" />
     </>
   ),
 
@@ -81,6 +107,8 @@ const icons: Record<string, ReactNode> = {
 
   plus: <path d="M12 5v14M5 12h14" />,
 
+  play: <path d="m8 5 12 7-12 7V5Z" />,
+
   logout: (
     <>
       <path d="M10 17l5-5-5-5M15 12H3M15 4h6v16h-6" />
@@ -119,6 +147,12 @@ const icons: Record<string, ReactNode> = {
   trash: (
     <>
       <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" />
+    </>
+  ),
+
+  menu: (
+    <>
+      <path d="M4 6h16M4 12h16M4 18h16" />
     </>
   ),
 }

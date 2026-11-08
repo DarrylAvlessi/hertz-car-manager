@@ -1,6 +1,7 @@
 import type PDFDocument from "pdfkit"
 import type {
   ClientFiche,
+  CommercialFiche,
   LocationFiche,
   MonthlyPoint,
   OverviewStats,
@@ -166,6 +167,7 @@ export function ficheClient(
       .fillColor(GRIS)
       .text("Aucune location enregistrée.")
   }
+
   for (const l of locations) {
     doc
       .fillColor(NOIR)
@@ -181,6 +183,30 @@ export function ficheClient(
     .fontSize(11)
     .font("Helvetica-Bold")
     .text(`Total dépensé : ${formatMontant(total)}`)
+}
+
+export function ficheCommercial(doc: Doc, fiche: CommercialFiche): void {
+  header(
+    doc,
+    "Fiche de performance commerciale",
+    `Hertz Bénin — éditée le ${new Date().toLocaleDateString("fr-FR")}`,
+  )
+  doc.fillColor(NOIR).fontSize(14).font("Helvetica-Bold").text(fiche.nom)
+  doc.fontSize(10).font("Helvetica")
+  doc.text(`Agence : ${fiche.agence ?? "—"}`)
+  doc.text(`Contact : ${fiche.contact || "—"}`)
+  doc.moveDown()
+  sectionTitle(doc, "Résultats commerciaux")
+  kpiLine(doc, "Locations conclues", String(fiche.locationsConclues))
+  kpiLine(doc, "Réservations conclues", String(fiche.reservationsConclues))
+  kpiLine(doc, "Passages au garage", String(fiche.passagesGarageConclues))
+  kpiLine(doc, "Ventes de véhicules conclues", String(fiche.ventesConclues))
+  kpiLine(
+    doc,
+    "Chiffre d'affaires locations",
+    formatMontant(fiche.chiffreAffaires),
+  )
+  kpiLine(doc, "Niveau de performance", fiche.performance)
 }
 
 export function rapportActivite(

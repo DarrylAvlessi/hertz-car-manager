@@ -4,6 +4,7 @@ const BASE: string =
   (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3101"
 
 const TOKEN_KEY = "hertz-auth-token"
+export const AUTH_SESSION_EXPIRED_EVENT = "hertz-auth-session-expired"
 
 export class ApiError extends Error {
   status: number
@@ -56,6 +57,9 @@ export async function apiFetch<T>(
     payload = null
   }
   if (!res.ok) {
+    if (res.status === 401) {
+      window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT))
+    }
     throw new ApiError(payload?.error ?? `Erreur ${res.status}`, res.status)
   }
   return payload as T

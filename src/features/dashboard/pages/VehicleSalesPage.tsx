@@ -44,6 +44,7 @@ export default function VehicleSalesPage() {
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("all")
   const [page, setPage] = useState(1)
   const [detail, setDetail] = useState<Sale | null>(null)
+  const [deleting, setDeleting] = useState<Sale | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = async () => {
@@ -64,6 +65,17 @@ export default function VehicleSalesPage() {
     }
   }
   useEffect(() => { void load() }, [])
+
+  const remove = async () => {
+    if (!deleting) return
+    try {
+      await apiFetch(`/api/vehicules/ventes/${deleting.id}`, { method: "DELETE" })
+      setDeleting(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Suppression de la vente impossible")
+    }
+  }
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -92,7 +104,10 @@ export default function VehicleSalesPage() {
         <td>{vehicles.find((item) => item.id === sale.vehiculeId)?.immatriculation ?? `#${sale.vehiculeId}`}</td>
         <td>{clients.find((item) => item.id === sale.acheteurId)?.nom ?? `#${sale.acheteurId}`}</td>
         <td>{sale.dateVente}</td><td>{formatMoney(sale.prixVente, sale.devise)}</td><td>{sale.statutPaiement}</td><td>{sale.statut}</td>
-        <td className="actions"><button title="Voir les détails" aria-label={`Détails de la vente ${sale.numeroVente}`} onClick={() => setDetail(sale)}><Icon name="eye" size={17} /></button></td>
+        <td className="actions">
+          <button title="Voir les détails" aria-label={`Détails de la vente ${sale.numeroVente}`} onClick={() => setDetail(sale)}><Icon name="eye" size={17} /></button>
+          <button className="action-delete" title="Supprimer la vente" aria-label={`Supprimer la vente ${sale.numeroVente}`} onClick={() => setDeleting(sale)}><Icon name="trash" size={16} /></button>
+        </td>
       </tr>)}</tbody>
     </table></div>
     <TablePagination page={page} total={filtered.length} onChange={setPage} />
@@ -113,5 +128,14 @@ export default function VehicleSalesPage() {
       { label: "Facture", value: detail.factureId ? `#${detail.factureId}` : "—" },
       { label: "Observation", value: detail.observation ?? "—" },
     ]} close={() => setDetail(null)} />}
+    {deleting && <div className="modal-backdrop"><div className="modal">
+      <p className="kicker">CONFIRMATION</p>
+      <h2>Supprimer cette vente ?</h2>
+      <p>La vente et son mouvement de sortie définitive seront supprimés.</p>
+      <div className="modal-actions">
+        <button className="secondary" onClick={() => setDeleting(null)}>Annuler</button>
+        <button className="danger" onClick={() => void remove()}>Supprimer</button>
+      </div>
+    </div></div>}
   </section>
 }

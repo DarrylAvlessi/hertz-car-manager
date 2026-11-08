@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import Icon from "@/shared/components/Icon"
 import Logo from "@/shared/components/Logo"
 import { HERO_PHOTO } from "@/shared/data/mockData"
 import { ROUTES } from "@/app/routes"
 import { apiFetch } from "@/shared/api/client"
+import { gsap } from "gsap"
 
 const MODULES: Array<[string, string, string, string]> = [
   [
@@ -35,6 +36,7 @@ const MODULES: Array<[string, string, string, string]> = [
 
 export default function HomePage() {
   const [vehiclesTotal, setVehiclesTotal] = useState<number | null>(null)
+  const mainRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     let active = true
@@ -50,8 +52,66 @@ export default function HomePage() {
     }
   }, [])
 
+  useLayoutEffect(() => {
+    const el = mainRef.current
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+
+    const ctx = gsap.context(() => {
+      const heroItems = el.querySelectorAll(".hero-copy > *")
+      if (heroItems.length) {
+        gsap.fromTo(
+          heroItems,
+          { autoAlpha: 0, y: 24 },
+          {
+            autoAlpha: 1,
+            y: 0,
+            duration: 0.6,
+            stagger: 0.1,
+            ease: "power2.out",
+            clearProps: "transform",
+          },
+        )
+      }
+
+      const metric = el.querySelector(".hero-metric")
+      if (metric) {
+        gsap.fromTo(
+          metric,
+          { autoAlpha: 0, x: 40 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            duration: 0.7,
+            delay: 0.25,
+            ease: "power2.out",
+            clearProps: "transform",
+          },
+        )
+      }
+
+      const cards = el.querySelectorAll(".module-cards article")
+      if (cards.length) {
+        gsap.fromTo(
+          cards,
+          { autoAlpha: 0, y: 20 },
+          {
+            autoAlpha: 1,
+            y: 0,
+            duration: 0.5,
+            stagger: 0.08,
+            delay: 0.2,
+            ease: "power2.out",
+            clearProps: "transform",
+          },
+        )
+      }
+    }, el)
+
+    return () => ctx.revert()
+  }, [])
+
   return (
-    <main>
+    <main ref={mainRef}>
       <header className="public-header">
         <Link to={ROUTES.home} className="logo-button" aria-label="Accueil">
           <Logo />

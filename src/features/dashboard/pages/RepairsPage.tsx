@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
 import { apiFetch } from "@/shared/api/client"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 import DetailModal from "@/shared/components/DetailModal"
 import Icon from "@/shared/components/Icon"
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
@@ -127,6 +128,7 @@ function RepairModal({ repair, close, saved }: { repair: Repair; close: () => vo
       })
       close()
       await saved()
+      notifyDashboardMutation("Réparation modifiée avec succès.")
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Modification impossible")
     }

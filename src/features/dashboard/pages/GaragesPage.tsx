@@ -3,6 +3,7 @@ import type { FormEvent } from "react"
 import Icon from "@/shared/components/Icon"
 import DetailModal from "@/shared/components/DetailModal"
 import { apiFetch } from "@/shared/api/client"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 
 interface Garage {
@@ -168,6 +169,9 @@ function GarageModal({
       })
       close()
       await saved()
+      notifyDashboardMutation(
+        row ? "Garage modifié avec succès." : "Garage enregistré avec succès.",
+      )
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Enregistrement impossible")
     }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import Icon from "@/shared/components/Icon"
 import DetailModal from "@/shared/components/DetailModal"
 import { apiFetch } from "@/shared/api/client"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
 type Row = {
   id: number
@@ -104,6 +105,11 @@ export default function ProlongationsPage() {
       setForm(null)
       setEditing(null)
       await load()
+      notifyDashboardMutation(
+        editing
+          ? "Prolongation modifiée avec succès."
+          : "Prolongation enregistrée avec succès.",
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : "Enregistrement impossible")
     }

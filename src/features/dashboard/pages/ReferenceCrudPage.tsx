@@ -7,6 +7,7 @@ import Icon from "@/shared/components/Icon"
 import DetailModal from "@/shared/components/DetailModal"
 
 import { apiFetch } from "@/shared/api/client"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 
@@ -378,6 +379,9 @@ function ReferenceModal({
       close()
 
       await saved()
+      notifyDashboardMutation(
+        `${kind === "categories" ? "Catégorie" : "Modèle"} ${row ? "modifié" : "enregistré"} avec succès.`,
+      )
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Enregistrement impossible")
     }

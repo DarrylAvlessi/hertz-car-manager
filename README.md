@@ -128,8 +128,9 @@ Servir `dist/` avec n'importe quel hébergeur statique **avec fallback SPA** (to
 
 ## Statut et limites connues
 
-- MySQL non encore branché : le backend tourne en mémoire seedée (`DB_DRIVER=memory`) ;
-  `docker compose up -d` + `npm run server:migrate` dans `server/` pour basculer.
+- Le backend peut se connecter au MySQL local de Laragon : démarrez MySQL dans Laragon,
+  configurez `server/.env` (`DB_DRIVER=mysql`, hôte, port et identifiants), puis lancez le serveur.
+  Initialisez `hertz_benin` avec `npm run db:migrate` depuis `server/` uniquement si elle est vide.
 - Écritures limitées au CRUD véhicules (référence) : clients/locations/réservations/maintenances
   en lecture seule — lots Abel & Prince.
 - Pastille flotte détaillée (En location / Entretien / Indisponibles) encore statique côté

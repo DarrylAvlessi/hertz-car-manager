@@ -11,7 +11,14 @@
     "server:dev": "npm run dev --prefix server",
     "server:build": "npm run build --prefix server",
     "server:start": "npm run start --prefix server",
-    "server:migrate": "npm run db:migrate --prefix server"
+    "server:migrate": "npm run db:migrate --prefix server",
+    "migrate:location-csv": "npm run db:migrate-location-csv --prefix server",
+    "migrate:reservation-status": "npm run db:migrate-reservation-lifecycle --prefix server",
+    "migrate:reservation-lost-affairs": "npm run db:migrate-reservation-lost-affairs --prefix server",
+    "migrate:contraventions": "npm run db:migrate-contraventions --prefix server",
+    "migrate:garage-timestamps": "npm run db:migrate-garage-timestamps --prefix server",
+    "migrate:sale-timestamps": "npm run db:migrate-sale-timestamps --prefix server",
+    "migrate:internal-exits": "npm run db:migrate-internal-exits --prefix server"
   },
   "dependencies": {
     "gsap": "^3.15.0",

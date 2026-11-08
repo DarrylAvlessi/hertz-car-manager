@@ -7,6 +7,20 @@ export class AvailabilityConflictError extends Error {
   }
 }
 
+export class ReservationStatusConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "ReservationStatusConflictError"
+  }
+}
+
+export class ReservationInUseError extends Error {
+  constructor() {
+    super("Cette réservation est déjà liée à une location et ne peut pas être supprimée.")
+    this.name = "ReservationInUseError"
+  }
+}
+
 // Seuils alignés sur le prototype : 38 Excellent, 31 Très bien, 25 Bien, 17 À suivre.
 export function performanceOf(locationsConclues: number): Performance {
   if (locationsConclues >= 35) return "Excellent"

@@ -1,11 +1,24 @@
-import { createContext, useCallback, useContext, useMemo, useState } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import type { ReactNode } from "react"
 import type { AuthUser } from "@/shared/data/types"
-import { apiFetch, getToken, setToken } from "@/shared/api/client"
+import {
+  apiFetch,
+  AUTH_SESSION_EXPIRED_EVENT,
+  getToken,
+  setToken,
+} from "@/shared/api/client"
 
 interface AuthContextValue {
   user: AuthUser | null
   isAuthenticated: boolean
+  isSessionLoading: boolean
   login: (email: string, password: string) => Promise<void>
   logout: () => void
 }
@@ -47,6 +60,58 @@ function readStoredUser(): AuthUser | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => readStoredUser())
+  const [isSessionLoading, setIsSessionLoading] = useState(true)
+
+  const clearSession = useCallback(() => {
+    setUser(null)
+    setToken(null)
+    try {
+      localStorage.removeItem(USER_KEY)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+
+    const handleExpiredSession = () => {
+      clearSession()
+      if (active) setIsSessionLoading(false)
+    }
+
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleExpiredSession)
+    if (!getToken()) {
+      setIsSessionLoading(false)
+    } else {
+      apiFetch<{ user: LoginResponse["user"] }>("/api/auth/me")
+        .then((data) => {
+          if (active) {
+            const next = toAuthUser(data.user)
+            setUser(next)
+            try {
+              localStorage.setItem(USER_KEY, JSON.stringify(next))
+            } catch {
+              // stockage indisponible : session mémoire uniquement
+            }
+          }
+        })
+        .catch(() => {
+          clearSession()
+        })
+        .finally(() => {
+          if (active) setIsSessionLoading(false)
+        })
+    }
+
+    return () => {
+      active = false
+      window.removeEventListener(
+        AUTH_SESSION_EXPIRED_EVENT,
+        handleExpiredSession,
+      )
+    }
+  }, [clearSession])
 
   const login = useCallback(async (email: string, password: string) => {
     const data = await apiFetch<LoginResponse>("/api/auth/login", {
@@ -63,19 +128,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(next)
   }, [])
 
-  const logout = useCallback(() => {
-    setUser(null)
-    setToken(null)
-    try {
-      localStorage.removeItem(USER_KEY)
-    } catch {
-      // ignore
-    }
-  }, [])
+  const logout = clearSession
 
   const value = useMemo(
-    () => ({ user, isAuthenticated: user !== null, login, logout }),
-    [user, login, logout],
+    () => ({
+      user,
+      isAuthenticated: user !== null,
+      isSessionLoading,
+      login,
+      logout,
+    }),
+    [user, isSessionLoading, login, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

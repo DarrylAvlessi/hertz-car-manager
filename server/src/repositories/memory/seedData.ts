@@ -4,8 +4,11 @@
 import { hashPassword } from "../../lib/password.js"
 import type {
   AdminRecord,
+  Agence,
   CategorieVehicule,
   Centre,
+  Conducteur,
+  Contravention,
   Garage,
   PassageGarage,
   Reparation,
@@ -23,9 +26,11 @@ import type {
 
 export interface SeedData {
   admin: AdminRecord
+  agences: Agence[]
   categories: CategorieVehicule[]
   modeles: ModeleVehicule[]
   centres: Centre[]
+  conducteurs: Conducteur[]
   garages: Garage[]
   passagesGarage: PassageGarage[]
   reparations: Reparation[]
@@ -35,6 +40,7 @@ export interface SeedData {
   locations: Location[]
   prolongations: Prolongation[]
   ventesVehicules: VenteVehicule[]
+  contraventions: Contravention[]
   reservations: Reservation[]
   maintenances: Maintenance[]
   mouvements: Mouvement[]
@@ -49,9 +55,15 @@ export async function buildSeedData(): Promise<SeedData> {
       role: "responsable",
       passwordHash: await hashPassword("hertz2025"),
     },
+    agences: [
+      { id: 1, code: "APS", nom: "Agence principale", adresse: null, telephone: null, actif: true },
+      { id: 2, code: "AEP", nom: "Agence Aéroport", adresse: null, telephone: null, actif: true },
+      { id: 3, code: "AGT", nom: "Agence Golden Tulip", adresse: null, telephone: null, actif: true },
+    ],
     categories: [],
     modeles: [],
     centres: [],
+    conducteurs: [],
     garages: [
       { id: 1, nom: "Japan Motors", adresse: null, telephone: null },
       { id: 2, nom: "Garage Rousseau", adresse: null, telephone: null },
@@ -177,6 +189,7 @@ export async function buildSeedData(): Promise<SeedData> {
     ],
     prolongations: [],
     ventesVehicules: [],
+    contraventions: [],
     reservations: [
       {
         id: 1,
@@ -186,7 +199,7 @@ export async function buildSeedData(): Promise<SeedData> {
         commercialId: 1,
         dateDepart: "2025-06-18",
         dureeJours: 3,
-        statut: "Aboutie",
+        statut: "Terminée",
       },
       {
         id: 2,
@@ -196,7 +209,7 @@ export async function buildSeedData(): Promise<SeedData> {
         commercialId: 2,
         dateDepart: "2025-06-18",
         dureeJours: 6,
-        statut: "Confirmée",
+        statut: "À venir",
       },
       {
         id: 3,
@@ -206,7 +219,7 @@ export async function buildSeedData(): Promise<SeedData> {
         commercialId: 3,
         dateDepart: "2025-06-19",
         dureeJours: 1,
-        statut: "En attente",
+        statut: "À venir",
       },
       {
         id: 4,
@@ -216,7 +229,7 @@ export async function buildSeedData(): Promise<SeedData> {
         commercialId: 1,
         dateDepart: "2025-06-15",
         dureeJours: 3,
-        statut: "Non aboutie",
+        statut: "Annulée",
       },
     ],
     maintenances: [

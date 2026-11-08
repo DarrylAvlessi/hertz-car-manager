@@ -12,11 +12,13 @@ import {
 
 const DAYS = ["Jeu", "Ven", "Sam", "Dim", "Lun", "Mar", "Mer"]
 const BARS = [42, 62, 48, 78, 55, 91, 72]
+const AMOUNTS = ["420k", "620k", "480k", "780k", "550k", "910k", "720k"]
 
 export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () => void }) {
   const [stats, setStats] = useState<OverviewStats | null>(null)
   const [recent, setRecent] = useState<TableResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [hoveredBar, setHoveredBar] = useState<number | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -46,25 +48,68 @@ export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () =>
 
   if (!stats || !recent) {
     return (
-      <section className="data-card">
-        <p className="p-4 text-sm text-neutral-500">Chargement de l’activité…</p>
-      </section>
+      <div className="overview-loading-skeleton" aria-busy="true" aria-label="Chargement">
+        <div className="stats-grid">
+          {[1, 2, 3, 4].map((i) => (
+            <article key={i} className="skeleton" style={{ minHeight: 142 }} />
+          ))}
+        </div>
+        <div className="dashboard-grid">
+          <article className="skeleton" style={{ minHeight: 320 }} />
+          <article className="skeleton" style={{ minHeight: 320 }} />
+        </div>
+      </div>
     )
   }
 
   const partDisponible = Math.round((stats.vehiculesDisponibles / Math.max(1, stats.vehiculesTotal)) * 100)
-  const cards: Array<[string, string, string, string, string]> = [
-    ["Chiffre d’affaires", formatCompactMillions(stats.caTotal), stats.devise, stats.caCroissance, "stats"],
-    ["Véhicules disponibles", String(stats.vehiculesDisponibles), `sur ${stats.vehiculesTotal}`, `${partDisponible}% du parc`, "car"],
-    ["Locations actives", String(stats.locationsActives), "contrats", "+3 aujourd’hui", "rental"],
-    ["Réservations en attente", String(stats.reservationsEnAttente), "demandes", "2 prioritaires", "booking"],
+  const cards: Array<{
+    label: string
+    value: string
+    unit: string
+    trend: string
+    icon: string
+    positive?: boolean
+  }> = [
+    {
+      label: "Chiffre d’affaires",
+      value: formatCompactMillions(stats.caTotal),
+      unit: stats.devise,
+      trend: stats.caCroissance,
+      icon: "stats",
+      positive: true,
+    },
+    {
+      label: "Véhicules disponibles",
+      value: String(stats.vehiculesDisponibles),
+      unit: `sur ${stats.vehiculesTotal}`,
+      trend: `${partDisponible}% du parc`,
+      icon: "car",
+      positive: partDisponible >= 50,
+    },
+    {
+      label: "Locations actives",
+      value: String(stats.locationsActives),
+      unit: "contrats",
+      trend: "+3 aujourd’hui",
+      icon: "rental",
+      positive: true,
+    },
+    {
+      label: "Réservations en attente",
+      value: String(stats.reservationsEnAttente),
+      unit: "demandes",
+      trend: "2 prioritaires",
+      icon: "booking",
+      positive: false,
+    },
   ]
 
   return (
     <>
       <section className="stats-grid">
-        {cards.map(([label, value, unit, trend, icon]) => (
-          <article key={label}>
+        {cards.map(({ label, value, unit, trend, icon, positive }) => (
+          <article key={label} className="overview-kpi-card">
             <div className="stat-icon">
               <Icon name={icon} />
             </div>
@@ -72,7 +117,9 @@ export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () =>
             <strong>
               {value} <small>{unit}</small>
             </strong>
-            <span>{trend}</span>
+            <span className={positive ? "kpi-trend positive" : "kpi-trend"}>
+              <i className="trend-arrow">{positive ? "↑" : "•"}</i> {trend}
+            </span>
           </article>
         ))}
       </section>
@@ -92,7 +139,17 @@ export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () =>
             </div>
             <div className="chart-bars">
               {BARS.map((h, i) => (
-                <div key={DAYS[i]}>
+                <div
+                  key={DAYS[i]}
+                  className="chart-bar-item"
+                  onMouseEnter={() => setHoveredBar(i)}
+                  onMouseLeave={() => setHoveredBar(null)}
+                >
+                  {hoveredBar === i && (
+                    <div className="chart-tooltip" role="tooltip">
+                      <strong>{AMOUNTS[i]}</strong>
+                    </div>
+                  )}
                   <i style={{ height: `${h}%` }} />
                   <span>{DAYS[i]}</span>
                 </div>
@@ -102,7 +159,7 @@ export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () =>
         </article>
         <article className="fleet-widget">
           <WidgetTitle title="État de la flotte" subtitle={`${stats.vehiculesTotal} véhicules au total`} />
-          <div className="donut">
+          <div className="donut" title={`${partDisponible}% de véhicules disponibles`}>
             <div>
               <strong>{partDisponible}%</strong>
               <span>disponibles</span>
@@ -135,32 +192,34 @@ export default function OverviewPage({ onSeeLocations }: { onSeeLocations: () =>
           action="Voir les locations"
           onAction={onSeeLocations}
         />
-        <table>
-          <thead>
-            <tr>
-              <th>Opération</th>
-              <th>Client</th>
-              <th>Véhicule</th>
-              <th>Échéance</th>
-              <th>État</th>
-            </tr>
-          </thead>
-          <tbody>
-            {recent.rows.map((r) => (
-              <tr key={r[0]}>
-                <td>
-                  <strong>{r[0]}</strong>
-                </td>
-                <td>{r[1]}</td>
-                <td>{r[2]}</td>
-                <td>{r[3]}</td>
-                <td>
-                  <StatusBadge value={r[4]!} />
-                </td>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Opération</th>
+                <th>Client</th>
+                <th>Véhicule</th>
+                <th>Échéance</th>
+                <th>État</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {recent.rows.map((r) => (
+                <tr key={r[0]}>
+                  <td>
+                    <strong>{r[0]}</strong>
+                  </td>
+                  <td>{r[1]}</td>
+                  <td>{r[2]}</td>
+                  <td>{r[3]}</td>
+                  <td>
+                    <StatusBadge value={r[4]!} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </>
   )

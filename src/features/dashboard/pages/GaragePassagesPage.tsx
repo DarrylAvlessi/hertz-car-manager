@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import type { FormEvent } from "react"
 import { apiFetch } from "@/shared/api/client"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 import DetailModal from "@/shared/components/DetailModal"
 import Icon from "@/shared/components/Icon"
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
@@ -18,6 +19,16 @@ interface Option { id: number; label: string }
 
 const types: PassageType[] = ["REPARATION", "REVISION", "ENTRETIEN", "VISITE_TECHNIQUE", "AUTRE"]
 const statuses: PassageStatus[] = ["EN_ATTENTE", "EN_COURS", "TERMINEE"]
+
+function dateTimeInput(value: string | null | undefined): string {
+  return value ? value.replace(" ", "T").slice(0, 16) : ""
+}
+
+function currentDateTimeInput(): string {
+  const now = new Date()
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
 
 export default function GaragePassagesPage() {
   const [rows, setRows] = useState<Passage[]>([])
@@ -99,32 +110,41 @@ export default function GaragePassagesPage() {
 
 function PassageModal({ passage, garages, close, saved }: { passage: Passage; garages: Option[]; close: () => void; saved: () => Promise<void> }) {
   const [form, setForm] = useState({
-    typePassage: passage?.typePassage ?? "REPARATION", dateEntree: passage?.dateEntree ?? new Date().toISOString().slice(0, 10),
-    dateSortiePrevue: passage?.dateSortiePrevue ?? "", dateSortieReelle: passage?.dateSortieReelle ?? "",
+    typePassage: passage?.typePassage ?? "REPARATION", dateEntree: dateTimeInput(passage?.dateEntree),
+    dateSortiePrevue: dateTimeInput(passage?.dateSortiePrevue), dateSortieReelle: dateTimeInput(passage?.dateSortieReelle),
     kmEntree: passage?.kmEntree == null ? "" : String(passage.kmEntree), motif: passage?.motif ?? "",
     statut: passage?.statut ?? "EN_COURS", coutTotal: String(passage?.coutTotal ?? 0),
     garageId: String(passage?.garageId ?? ""),
   })
   const [error, setError] = useState<string | null>(null)
   const set = (key: string, value: string) => setForm((current) => ({ ...current, [key]: value }))
+  const changeStatus = (value: PassageStatus) => {
+    setForm((current) => ({
+      ...current,
+      statut: value,
+      dateSortieReelle:
+        value === "TERMINEE" ? currentDateTimeInput() : "",
+    }))
+  }
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError(null)
     try {
       await apiFetch(`/api/parc/passages-garage/${passage.id}`, { method: "PUT", body: {
-        typePassage: form.typePassage, dateEntree: form.dateEntree, dateSortiePrevue: form.dateSortiePrevue || null, dateSortieReelle: form.dateSortieReelle || null,
+        typePassage: form.typePassage, dateEntree: form.dateEntree, dateSortiePrevue: form.dateSortiePrevue || null, dateSortieReelle: form.statut === "TERMINEE" ? form.dateSortieReelle : null,
         kmEntree: form.kmEntree === "" ? null : Number(form.kmEntree), motif: form.motif.trim() || null, statut: form.statut, coutTotal: Number(form.coutTotal) || 0,
         garageId: Number(form.garageId),
       } }); close(); await saved()
+      notifyDashboardMutation("Passage garage modifié avec succès.")
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Enregistrement impossible") }
   }
   return <div className="modal-backdrop"><form className="modal garage-passage-modal" onSubmit={submit}><button className="modal-close" type="button" onClick={close} aria-label="Fermer"><Icon name="close" /></button><p className="kicker">PARC AUTOMOBILE</p><h2>Modifier un passage garage</h2><div className="modal-fields">
     <label><span>Garage</span><select value={form.garageId} onChange={(e) => set("garageId", e.target.value)} required>{garages.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
     <label><span>Type de passage</span><select value={form.typePassage} onChange={(e) => set("typePassage", e.target.value)}>{types.map((value) => <option key={value}>{value}</option>)}</select></label>
-    <label><span>Date d'entrée</span><input type="date" value={form.dateEntree} onChange={(e) => set("dateEntree", e.target.value)} required /></label>
-    <label><span>Sortie prévue</span><input type="date" value={form.dateSortiePrevue} onChange={(e) => set("dateSortiePrevue", e.target.value)} /></label>
-    <label><span>Sortie réelle</span><input type="date" value={form.dateSortieReelle} onChange={(e) => set("dateSortieReelle", e.target.value)} /></label>
+    <label><span>Date d'entrée</span><input type="datetime-local" value={form.dateEntree} readOnly required /></label>
+    <label><span>Sortie prévue</span><input type="datetime-local" value={form.dateSortiePrevue} onChange={(e) => set("dateSortiePrevue", e.target.value)} /></label>
+    <label><span>Sortie réelle</span><input type="datetime-local" value={form.dateSortieReelle} readOnly={form.statut === "TERMINEE"} onChange={(e) => set("dateSortieReelle", e.target.value)} /></label>
     <label><span>Km entrée</span><input type="number" min="0" value={form.kmEntree} onChange={(e) => set("kmEntree", e.target.value)} /></label>
-    <label><span>Statut</span><select value={form.statut} onChange={(e) => set("statut", e.target.value)}>{statuses.map((value) => <option key={value}>{value}</option>)}</select></label>
+    <label><span>Statut</span><select value={form.statut} onChange={(e) => changeStatus(e.target.value as PassageStatus)}>{statuses.map((value) => <option key={value}>{value}</option>)}</select></label>
     <label><span>Coût total</span><input type="number" min="0" step="0.01" value={form.coutTotal} onChange={(e) => set("coutTotal", e.target.value)} /></label>
     <label><span>Motif</span><input value={form.motif} maxLength={255} onChange={(e) => set("motif", e.target.value)} /></label>
   </div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={close}>Annuler</button><button className="primary small" type="submit">Enregistrer <Icon name="check" size={17} /></button></div></form></div>

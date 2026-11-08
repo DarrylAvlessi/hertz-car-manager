@@ -79,7 +79,17 @@ export interface CommercialFicheDto {
 
   email?: string | null
 
+  agence?: string | null
+
+  codeAgence?: string | null
+
   locationsConclues: number
+
+  reservationsConclues: number
+
+  passagesGarageConclues: number
+
+  ventesConclues: number
 
   chiffreAffaires: number
 
@@ -106,18 +116,46 @@ export interface LocationFicheDto {
   statut: string
 }
 
-interface ReservationFicheDto {
+export interface ReservationFicheDto {
   id: number
 
   reference: string
 
+  clientId?: number | null
+
+  clientImport?: string | null
+
   client: string
 
+  vehicule: string
+
+  immatriculation: string
+
+  dateReservation?: string | null
+
+  vehiculeId?: number | null
+
+  commercialId?: number | null
+
+  commercialImport?: string | null
+
   dateDepart: string
+
+  dateFin?: string | null
 
   dureeJours: number
 
   commercial: string | null
+
+  mission?: string | null
+
+  lieuMission?: string | null
+
+  statutConfirmation?: string | null
+
+  statutFacturation?: string | null
+
+  statutPaiement?: "NON_PAYEE" | "PAYEE"
 
   statut: string
 }
@@ -152,13 +190,17 @@ export interface ClientDetailDto extends ClientFicheDto {
 
 export interface DailyStat {
   date: string
+
   montant: number
 }
 
 export interface FleetStatus {
   disponible: number
+
   enLocation: number
+
   entretien: number
+
   indisponible: number
 }
 
@@ -202,9 +244,13 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
       return {
         headers: [
           "Immatriculation",
+
           "Véhicule",
+
           "Catégorie",
+
           "Kilométrage",
+
           "Situation",
         ],
 
@@ -230,9 +276,13 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
       return {
         headers: [
           "Commercial",
+
           "Contact",
+
           "Locations conclues",
+
           "Chiffre d’affaires",
+
           "Performance",
         ],
 
@@ -281,26 +331,35 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
 
       return {
         headers: [
-          "Réservation",
+          "Immatriculation",
+          "Véhicule",
+          "Agent de vente",
+          "Date de Résa",
+          "Date de début",
+          "Date prévu de retour",
+          "Durée (j)",
+          "Mission",
+          "Lieu de la mission",
           "Client",
-          "Départ",
-          "Durée",
-          "Commercial",
-          "Statut",
+          "Statut de confirmation",
+          "Statut de la résa",
+          "Statut de la facturation",
         ],
 
         rows: rows.map((r) => [
-          r.reference,
-
+          r.immatriculation,
+          r.vehicule,
+          r.commercial ?? "",
+          r.dateReservation ? formatDateFr(r.dateReservation) : "",
+          r.dateDepart ? formatDateFr(r.dateDepart) : "",
+          r.dateFin ? formatDateFr(r.dateFin) : "",
+          String(r.dureeJours),
+          r.mission ?? "",
+          r.lieuMission ?? "",
           r.client,
-
-          formatDateFr(r.dateDepart),
-
-          formatDuree(r.dureeJours),
-
-          r.commercial ?? "—",
-
+          r.statutConfirmation ?? "",
           r.statut,
+          r.statutFacturation ?? "",
         ]),
 
         ids: rows.map((r) => r.id),
@@ -313,9 +372,13 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
       return {
         headers: [
           "Client",
+
           "Type",
+
           "Téléphone",
+
           "Locations",
+
           "Dernière opération",
         ],
 
@@ -335,6 +398,8 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
       }
     }
   }
+
+  throw new Error(`Module de tableau non pris en charge : ${module}`)
 }
 
 export function filterTable(data: TableResult, query: string): TableResult {
@@ -357,11 +422,18 @@ export function filterTable(data: TableResult, query: string): TableResult {
   }
 }
 
-export async function fetchOverviewStats(debut?: string, fin?: string): Promise<OverviewStats> {
+export async function fetchOverviewStats(
+  debut?: string,
+  fin?: string,
+): Promise<OverviewStats> {
   const qs = new URLSearchParams()
+
   if (debut) qs.set("debut", debut)
+
   if (fin) qs.set("fin", fin)
+
   const suffix = qs.toString() ? `?${qs.toString()}` : ""
+
   return apiFetch<OverviewStats>(`/api/stats/overview${suffix}`)
 }
 
@@ -375,9 +447,13 @@ export async function fetchRecentLocations(limit = 3): Promise<TableResult> {
 
     rows: rows.map((l) => [
       l.reference,
+
       l.client,
+
       l.vehicule,
+
       formatDateFr(l.dateFin),
+
       l.statut,
     ]),
 
@@ -385,19 +461,33 @@ export async function fetchRecentLocations(limit = 3): Promise<TableResult> {
   }
 }
 
-export async function fetchMonthly(debut?: string, fin?: string): Promise<MonthlyPoint[]> {
+export async function fetchMonthly(
+  debut?: string,
+  fin?: string,
+): Promise<MonthlyPoint[]> {
   const qs = new URLSearchParams()
+
   if (debut) qs.set("debut", debut)
+
   if (fin) qs.set("fin", fin)
+
   const suffix = qs.toString() ? `?${qs.toString()}` : ""
+
   return apiFetch<MonthlyPoint[]>(`/api/stats/monthly${suffix}`)
 }
 
-export async function fetchDailyStats(debut?: string, fin?: string): Promise<DailyStat[]> {
+export async function fetchDailyStats(
+  debut?: string,
+  fin?: string,
+): Promise<DailyStat[]> {
   const qs = new URLSearchParams()
+
   if (debut) qs.set("debut", debut)
+
   if (fin) qs.set("fin", fin)
+
   const suffix = qs.toString() ? `?${qs.toString()}` : ""
+
   return apiFetch<DailyStat[]>(`/api/stats/daily${suffix}`)
 }
 

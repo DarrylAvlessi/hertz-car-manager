@@ -5,10 +5,14 @@ export const LOGIN_PHOTO =
 
 export const MODULE_ICONS: Record<string, string> = {
   "Vue d’ensemble": "dashboard",
+  Agences: "agency",
   Commerciaux: "sellers",
+  Centres: "center",
   Véhicules: "car",
   Locations: "rental",
   Réservations: "booking",
+  Contraventions: "ticket",
   Clients: "client",
+  Conducteurs: "driver",
   Statistiques: "stats",
 }

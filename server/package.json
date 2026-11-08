@@ -10,6 +10,13 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate-location-csv": "tsx src/db/migrateLocationCsvBilling.ts",
+    "db:migrate-reservation-lifecycle": "tsx src/db/migrateReservationLifecycle.ts",
+    "db:migrate-reservation-lost-affairs": "tsx src/db/migrateReservationLostAffairs.ts",
+    "db:migrate-contraventions": "tsx src/db/migrateContraventions.ts",
+    "db:migrate-garage-timestamps": "tsx src/db/migrateGarageTimestamps.ts",
+    "db:migrate-sale-timestamps": "tsx src/db/migrateSaleTimestamps.ts",
+    "db:migrate-internal-exits": "tsx src/db/migrateInternalExits.ts",
     "db:import-parc": "tsx src/db/import-parc.ts"
   },
   "dependencies": {

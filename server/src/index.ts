@@ -6,6 +6,7 @@ import { repositories } from "./repositories/index.js"
 import { authRouter } from "./modules/auth/routes.js"
 import { vehiculesRouter } from "./modules/vehicules/routes.js"
 import { listsRouter } from "./modules/lists/routes.js"
+import { contraventionsRouter } from "./modules/contraventions/routes.js"
 import { statsRouter } from "./modules/stats/routes.js"
 import { pdfRouter } from "./modules/pdf/routes.js"
 import { parcRouter } from "./modules/parc/categoriesRoutes.js"
@@ -21,9 +22,22 @@ async function main(): Promise<void> {
       console.error("Mise à jour des statuts de location impossible :", error)
     }
   }
+  const refreshReservationStatuses = async () => {
+    try {
+      await repos.reservations.refreshStatuses()
+    } catch (error) {
+      console.error("Mise à jour des statuts de réservation impossible :", error)
+    }
+  }
   await refreshLocationStatuses()
+  await refreshReservationStatuses()
   const locationStatusTimer = setInterval(() => void refreshLocationStatuses(), 60_000)
+  const reservationStatusTimer = setInterval(
+    () => void refreshReservationStatuses(),
+    30_000,
+  )
   locationStatusTimer.unref()
+  reservationStatusTimer.unref()
 
   const app = express()
   app.use(cors({ origin: env.CORS_ORIGIN.split(",").map((o) => o.trim()) }))
@@ -43,6 +57,7 @@ async function main(): Promise<void> {
   app.use("/api/auth", authRouter(repos, env))
   app.use("/api/parc", parcRouter(repos, env))
   app.use("/api/vehicules", vehiculesRouter(repos, env))
+  app.use("/api/contraventions", contraventionsRouter(repos, env))
   app.use("/api", listsRouter(repos, env))
   app.use("/api/stats", statsRouter(repos, env))
   app.use("/api/export", pdfRouter(repos, env))

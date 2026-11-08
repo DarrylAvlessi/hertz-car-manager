@@ -7,6 +7,7 @@ import { createPortal } from "react-dom"
 import { exportUrl, apiFetch } from "@/shared/api/client"
 
 import StatusBadge from "@/shared/components/StatusBadge"
+import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
 import {
   fetchClientFiche,
@@ -282,6 +283,9 @@ export default function ClientCommercialModal({
         })
       }
 
+      notifyDashboardMutation(
+        `${module === "Clients" ? "Client" : "Commercial"} modifié avec succès.`,
+      )
       onSaved()
 
       close()
@@ -304,37 +308,27 @@ export default function ClientCommercialModal({
         : "Fiche de performance"
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
-      onClick={closeIfIdle}
-    >
+    <div className="modal-backdrop" onClick={closeIfIdle}>
       <section
-        className="max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+        className={`modal client-commercial-modal${mode === "edit" ? "" : " view-mode"}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="client-commercial-modal-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="mb-5 flex items-start justify-between gap-4">
+        <header className="client-commercial-modal-header">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-600">
-              Hertz Bénin
-            </p>
-            <h2
-              id="client-commercial-modal-title"
-              className="mt-2 text-xl font-semibold text-slate-900"
-            >
-              {title}
-            </h2>
+            <p className="kicker">HERTZ BÉNIN</p>
+            <h2 id="client-commercial-modal-title">{title}</h2>
             {!loading && !error && (
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="client-commercial-subtitle">
                 {module === "Clients" ? client?.nom : commercial?.nom}
               </p>
             )}
           </div>
           <button
             type="button"
-            className="text-lg text-slate-500 disabled:opacity-50"
+            className="modal-close"
             onClick={closeIfIdle}
             disabled={saving}
             aria-label="Fermer"
@@ -350,326 +344,309 @@ export default function ClientCommercialModal({
             {error}
           </p>
         ) : mode === "edit" ? (
-          <form className="space-y-4" onSubmit={submit}>
-            {module === "Clients" ? (
-              <>
-                <div className="grid gap-4 sm:grid-cols-2">
+          <form className="client-commercial-edit-form" onSubmit={submit}>
+            <div className="modal-fields">
+              {module === "Clients" ? (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Nom de famille
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={clientDraft.nom}
+                        onChange={(event) =>
+                          setClientDraft((current) => ({
+                            ...current,
+
+                            nom: event.target.value,
+                          }))
+                        }
+                        required
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Prénom
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={clientDraft.prenom}
+                        onChange={(event) =>
+                          setClientDraft((current) => ({
+                            ...current,
+
+                            prenom: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Type
+                      </span>
+                      <select
+                        className={fieldClass}
+                        value={clientDraft.type}
+                        onChange={(event) =>
+                          setClientDraft((current) => ({
+                            ...current,
+
+                            type: event.target.value as ClientType,
+                          }))
+                        }
+                      >
+                        <option>Particulier</option>
+                        <option>Entreprise</option>
+                        <option>Organisation</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Téléphone
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={clientDraft.telephone}
+                        onChange={(event) =>
+                          setClientDraft((current) => ({
+                            ...current,
+
+                            telephone: event.target.value,
+                          }))
+                        }
+                        required
+                      />
+                    </label>
+                  </div>
                   <label className="block">
                     <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Nom de famille
+                      E-mail
                     </span>
                     <input
                       className={fieldClass}
-                      value={clientDraft.nom}
+                      type="email"
+                      value={clientDraft.email}
                       onChange={(event) =>
                         setClientDraft((current) => ({
                           ...current,
-                          nom: event.target.value,
+
+                          email: event.target.value,
                         }))
                       }
-                      required
                     />
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Prénom
+                      Adresse
                     </span>
                     <input
                       className={fieldClass}
-                      value={clientDraft.prenom}
-                      onChange={(event) =>
-                        setClientDraft((current) => ({
-                          ...current,
-                          prenom: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Type
-                    </span>
-                    <select
-                      className={fieldClass}
-                      value={clientDraft.type}
+                      value={clientDraft.adresse}
                       onChange={(event) =>
                         setClientDraft((current) => ({
                           ...current,
 
-                          type: event.target.value as ClientType,
+                          adresse: event.target.value,
                         }))
                       }
-                    >
-                      <option>Particulier</option>
-                      <option>Entreprise</option>
-                      <option>Organisation</option>
-                    </select>
+                    />
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Téléphone
+                      Numéro de permis
                     </span>
                     <input
                       className={fieldClass}
-                      value={clientDraft.telephone}
+                      value={clientDraft.numPermis}
                       onChange={(event) =>
                         setClientDraft((current) => ({
                           ...current,
 
-                          telephone: event.target.value,
+                          numPermis: event.target.value,
                         }))
                       }
-                      required
                     />
                   </label>
-                </div>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    E-mail
-                  </span>
-                  <input
-                    className={fieldClass}
-                    type="email"
-                    value={clientDraft.email}
-                    onChange={(event) =>
-                      setClientDraft((current) => ({
-                        ...current,
-                        email: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Adresse
-                  </span>
-                  <input
-                    className={fieldClass}
-                    value={clientDraft.adresse}
-                    onChange={(event) =>
-                      setClientDraft((current) => ({
-                        ...current,
-                        adresse: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    Numéro de permis
-                  </span>
-                  <input
-                    className={fieldClass}
-                    value={clientDraft.numPermis}
-                    onChange={(event) =>
-                      setClientDraft((current) => ({
-                        ...current,
+                </>
+              ) : (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Nom
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={commercialDraft.nom}
+                        onChange={(event) =>
+                          setCommercialDraft((current) => ({
+                            ...current,
 
-                        numPermis: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-              </>
-            ) : (
-              <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Nom
-                    </span>
-                    <input
-                      className={fieldClass}
-                      value={commercialDraft.nom}
-                      onChange={(event) =>
-                        setCommercialDraft((current) => ({
-                          ...current,
-                          nom: event.target.value,
-                        }))
-                      }
-                      required
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Prénom
-                    </span>
-                    <input
-                      className={fieldClass}
-                      value={commercialDraft.prenom}
-                      onChange={(event) =>
-                        setCommercialDraft((current) => ({
-                          ...current,
+                            nom: event.target.value,
+                          }))
+                        }
+                        required
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Prénom
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={commercialDraft.prenom}
+                        onChange={(event) =>
+                          setCommercialDraft((current) => ({
+                            ...current,
 
-                          prenom: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
+                            prenom: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Abréviation
+                      </span>
+                      <input
+                        className={fieldClass}
+                        maxLength={10}
+                        value={commercialDraft.abreviation}
+                        onChange={(event) =>
+                          setCommercialDraft((current) => ({
+                            ...current,
+
+                            abreviation: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-slate-700">
+                        Téléphone
+                      </span>
+                      <input
+                        className={fieldClass}
+                        value={commercialDraft.telephone}
+                        onChange={(event) =>
+                          setCommercialDraft((current) => ({
+                            ...current,
+
+                            telephone: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
                   <label className="block">
                     <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Abréviation
+                      E-mail
                     </span>
                     <input
                       className={fieldClass}
-                      maxLength={10}
-                      value={commercialDraft.abreviation}
+                      type="email"
+                      value={commercialDraft.email}
                       onChange={(event) =>
                         setCommercialDraft((current) => ({
                           ...current,
 
-                          abreviation: event.target.value,
+                          email: event.target.value,
                         }))
                       }
                     />
                   </label>
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Téléphone
-                    </span>
-                    <input
-                      className={fieldClass}
-                      value={commercialDraft.telephone}
-                      onChange={(event) =>
-                        setCommercialDraft((current) => ({
-                          ...current,
-
-                          telephone: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">
-                    E-mail
-                  </span>
-                  <input
-                    className={fieldClass}
-                    type="email"
-                    value={commercialDraft.email}
-                    onChange={(event) =>
-                      setCommercialDraft((current) => ({
-                        ...current,
-
-                        email: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-              </>
-            )}
-
+                </>
+              )}
+            </div>
             {error && (
               <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                 {error}
               </p>
             )}
-            <footer className="flex justify-end gap-3 pt-2">
+            <footer className="modal-actions">
               <button
                 type="button"
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
+                className="secondary"
                 onClick={closeIfIdle}
                 disabled={saving}
               >
                 Annuler
               </button>
-              <button
-                type="submit"
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={saving}
-              >
+              <button type="submit" className="primary small" disabled={saving}>
                 {saving ? "Enregistrement…" : "Enregistrer les modifications"}
               </button>
             </footer>
           </form>
         ) : module === "Clients" && client ? (
-          <div className="space-y-6">
-            <dl className="grid gap-4 rounded-xl bg-slate-50 p-4 text-sm sm:grid-cols-2">
+          <div className="client-commercial-details">
+            <dl className="client-commercial-summary">
               <div>
-                <dt className="text-slate-500">Type</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {client.type}
-                </dd>
+                <dt>Type</dt>
+                <dd>{client.type}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Téléphone</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {client.telephone}
-                </dd>
+                <dt>Téléphone</dt>
+                <dd>{client.telephone}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">E-mail</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {client.email || "—"}
-                </dd>
+                <dt>E-mail</dt>
+                <dd>{client.email || "—"}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Adresse</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {client.adresse || "—"}
-                </dd>
+                <dt>Adresse</dt>
+                <dd>{client.adresse || "—"}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Nombre de locations</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {client.locationsCount}
-                </dd>
+                <dt>Nombre de locations</dt>
+                <dd>{client.locationsCount}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Dernière opération</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {client.derniereOperation ?? "—"}
-                </dd>
+                <dt>Dernière opération</dt>
+                <dd>{client.derniereOperation ?? "—"}</dd>
               </div>
             </dl>
 
             <section>
-              <h3 className="mb-3 text-sm font-semibold text-slate-900">
-                Historique des locations
-              </h3>
+              <h3>Historique des locations</h3>
               {client.locations.length === 0 ? (
-                <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">
+                <p className="client-commercial-empty">
                   Aucune location enregistrée pour ce client.
                 </p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[620px] border-collapse text-left text-sm">
+                <div className="client-commercial-history">
+                  <table>
                     <thead>
-                      <tr className="border-b border-slate-200 text-xs uppercase text-slate-500">
-                        <th className="px-3 py-2">Contrat</th>
-                        <th className="px-3 py-2">Véhicule</th>
-                        <th className="px-3 py-2">Type</th>
-                        <th className="px-3 py-2">Période</th>
-                        <th className="px-3 py-2">Montant</th>
-                        <th className="px-3 py-2">État</th>
+                      <tr>
+                        <th>Contrat</th>
+                        <th>Véhicule</th>
+                        <th>Type</th>
+                        <th>Période</th>
+                        <th>Montant</th>
+                        <th>État</th>
                       </tr>
                     </thead>
                     <tbody>
                       {client.locations.map((location) => (
-                        <tr
-                          key={location.id}
-                          className="border-b border-slate-100"
-                        >
-                          <td className="px-3 py-3 font-medium text-slate-900">
-                            {location.reference}
-                          </td>
-                          <td className="px-3 py-3">{location.vehicule}</td>
-                          <td className="px-3 py-3">{location.type}</td>
-                          <td className="px-3 py-3">
+                        <tr key={location.id}>
+                          <td>{location.reference}</td>
+                          <td>{location.vehicule}</td>
+                          <td>{location.type}</td>
+                          <td>
                             {dateLabel(location.dateDebut)} –{" "}
                             {dateLabel(location.dateFin)}
                           </td>
-                          <td className="px-3 py-3">
+                          <td>
                             {location.montant === undefined
                               ? "—"
                               : formatMontant(location.montant)}
                           </td>
-                          <td className="px-3 py-3">
+                          <td>
                             <StatusBadge value={location.statut} />
                           </td>
                         </tr>
@@ -680,26 +657,24 @@ export default function ClientCommercialModal({
               )}
             </section>
 
-            {error && (
-              <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </p>
-            )}
-            <footer className="flex justify-end gap-3">
+            {error && <p className="form-error">{error}</p>}
+            <footer className="modal-actions">
               <button
                 type="button"
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
+                className="secondary"
                 onClick={closeIfIdle}
               >
                 Fermer
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+                className="primary small"
                 onClick={() =>
                   window.open(
                     exportUrl(`/api/export/clients/${id}/fiche`),
+
                     "_blank",
+
                     "noopener",
                   )
                 }
@@ -709,48 +684,65 @@ export default function ClientCommercialModal({
             </footer>
           </div>
         ) : commercial ? (
-          <div className="space-y-6">
-            <dl className="grid gap-4 rounded-xl bg-slate-50 p-4 text-sm sm:grid-cols-2">
+          <div className="client-commercial-details">
+            <dl className="client-commercial-summary">
               <div>
-                <dt className="text-slate-500">Contact</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {commercial.contact || "—"}
-                </dd>
+                <dt>Contact</dt>
+                <dd>{commercial.contact || "—"}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Abréviation</dt>
-                <dd className="mt-1 font-medium text-slate-900">
-                  {commercial.abreviation || "—"}
-                </dd>
+                <dt>Abréviation</dt>
+                <dd>{commercial.abreviation || "—"}</dd>
               </div>
             </dl>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <article className="rounded-xl border border-slate-200 p-4">
-                <p className="text-xs text-slate-500">Locations conclues</p>
-                <p className="mt-2 text-xl font-semibold text-slate-900">
-                  {commercial.locationsConclues}
-                </p>
+            <div className="client-commercial-metrics">
+              <article>
+                <p>Locations conclues</p>
+                <strong>{commercial.locationsConclues}</strong>
               </article>
-              <article className="rounded-xl border border-slate-200 p-4">
-                <p className="text-xs text-slate-500">Chiffre d’affaires</p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">
-                  {formatMontant(commercial.chiffreAffaires)}
-                </p>
+              <article>
+                <p>Réservations conclues</p>
+                <strong>{commercial.reservationsConclues}</strong>
               </article>
-              <article className="rounded-xl border border-slate-200 p-4">
-                <p className="text-xs text-slate-500">Performance</p>
-                <div className="mt-2">
+              <article>
+                <p>Passages garage</p>
+                <strong>{commercial.passagesGarageConclues}</strong>
+              </article>
+              <article>
+                <p>Ventes conclues</p>
+                <strong>{commercial.ventesConclues}</strong>
+              </article>
+              <article>
+                <p>Chiffre d’affaires</p>
+                <strong>{formatMontant(commercial.chiffreAffaires)}</strong>
+              </article>
+              <article>
+                <p>Performance</p>
+                <div>
                   <StatusBadge value={commercial.performance} />
                 </div>
               </article>
             </div>
-            <footer className="flex justify-end">
+            <footer className="modal-actions">
               <button
                 type="button"
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
+                className="secondary"
                 onClick={closeIfIdle}
               >
                 Fermer
+              </button>
+              <button
+                type="button"
+                className="primary small"
+                onClick={() =>
+                  window.open(
+                    exportUrl(`/api/export/commerciaux/${id}/fiche`),
+                    "_blank",
+                    "noopener",
+                  )
+                }
+              >
+                Imprimer la fiche PDF
               </button>
             </footer>
           </div>

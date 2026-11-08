@@ -14,7 +14,8 @@ export async function repositories(env: Env): Promise<Repositories> {
     } catch {
       console.error(
         `MySQL injoignable (${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}). ` +
-          "Vérifiez server/.env puis : docker compose up -d && npm run db:migrate",
+          "Vérifiez que MySQL est démarré dans Laragon et que server/.env contient les bons identifiants. " +
+          "Si la base est vide, initialisez-la avec npm run db:migrate depuis server/.",
       )
       process.exit(1)
     }
