@@ -269,6 +269,8 @@ export interface PassageGarage {
 
   kmEntree: number | null
 
+  kmSortie: number | null
+
   motif: string | null
 
   statut: PassageGarageStatut
@@ -296,6 +298,8 @@ export interface PassageGarageInput {
   dateSortieReelle?: string | null
 
   kmEntree?: number | null
+
+  kmSortie?: number | null
 
   motif?: string | null
 
@@ -951,7 +955,7 @@ export interface CommercialRepo {
 
   update(id: number, input: CommercialInput): Promise<Commercial | null>
 
-  deactivate(id: number): Promise<boolean>
+  remove(id: number): Promise<boolean>
 }
 
 export interface LocationRepo {

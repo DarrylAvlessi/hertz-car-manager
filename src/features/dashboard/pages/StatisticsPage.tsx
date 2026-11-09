@@ -333,7 +333,6 @@ export default function StatisticsPage() {
         <div>
           <p className="stats-eyebrow">HERTZ BÉNIN · {report.perimetre}</p>
           <h2>Statistiques et rapports</h2>
-          <p>Indicateurs de performance du parc et des locations</p>
         </div>
         <div className="statistics-controls">
           <DatePeriodFilter value={period} onChange={setPeriod} />

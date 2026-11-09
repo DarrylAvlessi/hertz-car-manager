@@ -108,6 +108,8 @@ interface GarageExportRow {
 
   kmEntree: number | null
 
+  kmSortie?: number | null
+
   motif: string | null
 
   statut: string
@@ -594,6 +596,12 @@ export default function MovementsPage() {
         const returnDate = dateTimeParts(
           returnMovement?.date ?? passage.dateSortieReelle,
         )
+        const departureKm = departureMovement?.kilometrage ?? passage.kmEntree
+        const returnKm = returnMovement?.kilometrage ?? passage.kmSortie ?? null
+        const distance =
+          departureKm !== null && departureKm !== undefined && returnKm !== null
+            ? returnKm - departureKm
+            : ""
 
         const expectedDate = dateTimeParts(passage.dateSortiePrevue)
 
@@ -613,7 +621,7 @@ export default function MovementsPage() {
             [passage.typePassage, passage.motif].filter(Boolean).join(" - "),
             "",
 
-            passage.kmEntree ?? "",
+            departureKm ?? "",
             expectedDate.date,
             returnDate.date,
             returnDate.time,
@@ -624,8 +632,8 @@ export default function MovementsPage() {
                 ? daysBetween(passage.dateEntree, passage.dateSortiePrevue)
                 : "",
 
-            "",
-            "",
+            returnKm ?? "",
+            distance,
             passage.dateSortieReelle ? "DIRECTION HERTZ" : "",
             departureMovement?.validateurId == null
               ? ""

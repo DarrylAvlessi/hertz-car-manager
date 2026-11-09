@@ -231,13 +231,22 @@ function parseLocationCsv(
   }
 
   const clientsByName = new Map<string, number>()
+  const clientNameKey = (name: string) =>
+    normalizeCsvLookup(name)
+      .replace(/[^A-Z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .sort()
+      .join(" ")
+  const addClientName = (name: string, clientId: number) => {
+    const key = clientNameKey(name)
+    if (key) clientsByName.set(key, clientId)
+  }
   for (const client of clients) {
-    clientsByName.set(normalizeCsvLookup(client.nom), client.id)
-    if (client.prenom) {
-      clientsByName.set(
-        normalizeCsvLookup(`${client.prenom} ${client.nom}`),
-        client.id,
-      )
+    addClientName(client.nom, client.id)
+    if (client.prenom && client.nomFamille) {
+      addClientName(`${client.prenom} ${client.nomFamille}`, client.id)
+      addClientName(`${client.nomFamille} ${client.prenom}`, client.id)
     }
   }
   const vehiclesByRegistration = new Map(
@@ -269,7 +278,7 @@ function parseLocationCsv(
     const rowErrors: string[] = []
     const clientName = get(values, "NOMDUCLIENT")
     const registration = get(values, "IMMATVEHICULE")
-    const clientId = clientsByName.get(normalizeCsvLookup(clientName))
+    const clientId = clientsByName.get(clientNameKey(clientName))
     const vehicle = vehiclesByRegistration.get(
       registration.replace(/[^a-z0-9]/gi, "").toUpperCase(),
     )
@@ -1159,8 +1168,17 @@ export function listsRouter(repos: Repositories, env: Env): Router {
     guard,
 
     asyncHandler(async (req, res) => {
-      if (!(await repos.commerciaux.deactivate(idParam(req.params.id)))) {
-        throw notFound("Commercial introuvable ou déjà désactivé")
+      try {
+        if (!(await repos.commerciaux.remove(idParam(req.params.id)))) {
+          throw notFound("Commercial introuvable")
+        }
+      } catch (error) {
+        if (isForeignKeyError(error)) {
+          throw conflict(
+            "Ce commercial est associé à des données historiques (locations, réservations, affaires perdues ou sorties internes) et ne peut pas être supprimé définitivement.",
+          )
+        }
+        throw error
       }
 
       res.status(204).end()

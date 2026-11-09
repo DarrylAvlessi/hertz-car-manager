@@ -1,4 +1,5 @@
 import type mysql from "mysql2/promise"
+import { badRequest } from "../../lib/httpErrors.js"
 
 import type {
   Admin,
@@ -1032,6 +1033,8 @@ function mapPassageGarage(r: Row): PassageGarage {
 
     kmEntree: numNull(r.km_entree),
 
+    kmSortie: numNull(r.km_sortie),
+
     motif: strNull(r.motif),
 
     statut: r.statut as PassageGarage["statut"],
@@ -1166,6 +1169,10 @@ class MysqlPassageGarageRepo implements PassageGarageRepo {
 
   private select = `SELECT p.id_passage AS id, p.type_passage, p.date_entree,
                            p.date_sortie_prevue, p.date_sortie_reelle, p.km_entree,
+                           (SELECT m.kilometrage FROM mouvement_vehicule m
+                             WHERE m.id_passage = p.id_passage
+                               AND m.type_mouvement = 'RETOUR_GARAGE'
+                             ORDER BY m.id_mouvement DESC LIMIT 1) AS km_sortie,
                            p.motif, p.statut, p.cout_total,
                            p.id_vehicule AS vehicule_id, p.id_garage AS garage_id,
                            v.immatriculation AS vehicule, g.nom AS garage,
@@ -1230,6 +1237,15 @@ class MysqlPassageGarageRepo implements PassageGarageRepo {
         await connection.rollback()
 
         return null
+      }
+
+      if (input.statut === "TERMINEE") {
+        if (input.kmSortie === undefined || input.kmSortie === null) {
+          throw badRequest("Le kilométrage de retour est obligatoire pour terminer le passage.")
+        }
+        if (current.km_entree !== null && input.kmSortie < num(current.km_entree)) {
+          throw badRequest("Le kilométrage de retour ne peut pas être inférieur au kilométrage d'entrée.")
+        }
       }
 
       const columns: Array<[keyof PassageGarageInput, string]> = [
@@ -1308,6 +1324,27 @@ class MysqlPassageGarageRepo implements PassageGarageRepo {
           "UPDATE passage_garage SET date_sortie_reelle = ? WHERE id_passage = ?",
 
           [dateSortie, id],
+        )
+
+        const returnMovements = await query<Row>(
+          connection,
+          `SELECT id_mouvement AS id
+             FROM mouvement_vehicule
+            WHERE id_passage = ? AND type_mouvement = 'RETOUR_GARAGE'
+            ORDER BY id_mouvement DESC
+            LIMIT 1`,
+          [id],
+        )
+        if (!returnMovements[0]) {
+          throw new Error("Le mouvement de retour du garage n'a pas été créé.")
+        }
+        await connection.query(
+          "UPDATE mouvement_vehicule SET kilometrage = ? WHERE id_mouvement = ?",
+          [input.kmSortie, num(returnMovements[0].id)],
+        )
+        await connection.query(
+          "UPDATE vehicule SET kilometrage = GREATEST(kilometrage, ?) WHERE id_vehicule = ?",
+          [input.kmSortie, num(current.id_vehicule)],
         )
 
         if (current.statut !== "TERMINEE") {
@@ -2416,7 +2453,7 @@ class MysqlCommercialRepo implements CommercialRepo {
 
         input.telephone ?? null,
 
-        input.email ?? null,
+        input.email?.trim() || null,
 
         input.agenceId ?? null,
 
@@ -2449,7 +2486,7 @@ class MysqlCommercialRepo implements CommercialRepo {
 
       input.telephone || null,
 
-      input.email || null,
+      input.email?.trim() || null,
     ]
 
     if (input.agenceId !== undefined) {
@@ -2502,7 +2539,7 @@ class MysqlCommercialRepo implements CommercialRepo {
               input.nom,
               input.prenom ?? null,
               input.telephone ?? null,
-              input.email ?? null,
+              input.email?.trim() || null,
               input.agenceId ?? null,
               existingId,
             ],
@@ -2520,7 +2557,7 @@ class MysqlCommercialRepo implements CommercialRepo {
               input.prenom ?? null,
               input.abreviation,
               input.telephone ?? null,
-              input.email ?? null,
+              input.email?.trim() || null,
               input.agenceId ?? null,
               adminId,
             ],
@@ -2542,9 +2579,9 @@ class MysqlCommercialRepo implements CommercialRepo {
     }
   }
 
-  async deactivate(id: number): Promise<boolean> {
+  async remove(id: number): Promise<boolean> {
     const [result] = await this.pool.query(
-      "UPDATE commercial SET actif = FALSE WHERE id_commercial = ?",
+      "DELETE FROM commercial WHERE id_commercial = ?",
       [id],
     )
 

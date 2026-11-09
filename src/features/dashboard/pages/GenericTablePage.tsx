@@ -1273,7 +1273,11 @@ export default function GenericTablePage({
                   : "ce commercial"}{" "}
               ?
             </h2>
-            <p>La suppression de « {deleting.label} » est définitive.</p>
+            <p>
+              La suppression de « {deleting.label} » est définitive.
+              {module === "Commerciaux" &&
+                " Certaines références facultatives à l'historique seront détachées. Elle sera refusée si une location, réservation, affaire perdue ou sortie interne y est encore rattachée."}
+            </p>
             {deleteError && <p className="form-error">{deleteError}</p>}
             <div className="modal-actions">
               <button

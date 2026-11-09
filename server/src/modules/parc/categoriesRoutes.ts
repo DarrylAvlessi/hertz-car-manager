@@ -1,7 +1,7 @@
 import { Router } from "express"
 import { z } from "zod"
 import { asyncHandler } from "../../middleware/asyncHandler.js"
-import { conflict, notFound } from "../../lib/httpErrors.js"
+import { badRequest, conflict, notFound } from "../../lib/httpErrors.js"
 import { requireAuth, requireRole, paginationSchema, validateBody } from "../../middleware/auth.js"
 import type { Env } from "../../config/env.js"
 import type { Repositories } from "../../repositories/types.js"
@@ -61,6 +61,7 @@ const passageGarageSchema = z.object({
   dateSortiePrevue: passageGarageDateSchema.nullable().optional(),
   dateSortieReelle: passageGarageDateSchema.nullable().optional(),
   kmEntree: z.number().int().min(0).nullable().optional(),
+  kmSortie: z.number().int().min(0).nullable().optional(),
   motif: z.string().trim().max(255).nullable().optional(),
   statut: z.enum(["EN_ATTENTE", "EN_COURS", "TERMINEE"]),
   coutTotal: z.number().min(0).optional(),
@@ -338,7 +339,16 @@ export function parcRouter(repos: Repositories, env: Env): Router {
     [...guard, validateBody(passageGarageSchema.partial())],
     asyncHandler(async (req, res) => {
       const id = Number(req.params.id)
-      if (!(await repos.passagesGarage.get(id))) throw notFound("Passage garage introuvable")
+      const current = await repos.passagesGarage.get(id)
+      if (!current) throw notFound("Passage garage introuvable")
+      if (req.body.statut === "TERMINEE") {
+        if (req.body.kmSortie === undefined || req.body.kmSortie === null) {
+          throw badRequest("Le kilométrage de retour est obligatoire pour terminer le passage.")
+        }
+        if (current.kmEntree !== null && req.body.kmSortie < current.kmEntree) {
+          throw badRequest("Le kilométrage de retour ne peut pas être inférieur au kilométrage d'entrée.")
+        }
+      }
       if (req.body.vehiculeId !== undefined && !(await repos.vehicules.get(req.body.vehiculeId))) throw notFound("Véhicule introuvable")
       if (req.body.garageId !== undefined && !(await repos.garages.get(req.body.garageId))) throw notFound("Garage introuvable")
       res.json((await repos.passagesGarage.update(id, req.body))!)

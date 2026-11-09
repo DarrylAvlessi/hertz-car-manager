@@ -75,7 +75,10 @@ export async function buildSeedData(): Promise<SeedData> {
         dateEntree: "2026-10-14",
         dateSortiePrevue: null,
         dateSortieReelle: null,
+
         kmEntree: null,
+
+        kmSortie: null,
         motif: "Date d'entrée inconnue (date d'enregistrement)",
         statut: "EN_COURS",
         coutTotal: 0,

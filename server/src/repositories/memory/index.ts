@@ -74,6 +74,7 @@ import type {
   VenteVehiculeInput,
   VenteVehiculeRepo,
 } from "../types.js"
+import { badRequest, conflict } from "../../lib/httpErrors.js"
 
 import {
   addDays,
@@ -553,11 +554,24 @@ class MemoryPassageGarageRepo implements PassageGarageRepo {
 
     if (!row) return null
 
+    if (input.statut === "TERMINEE") {
+      if (input.kmSortie === undefined || input.kmSortie === null) {
+        throw badRequest("Le kilométrage de retour est obligatoire pour terminer le passage.")
+      }
+      if (row.kmEntree !== null && input.kmSortie < row.kmEntree) {
+        throw badRequest("Le kilométrage de retour ne peut pas être inférieur au kilométrage d'entrée.")
+      }
+    }
+
     const wasCompleted = row.statut === "TERMINEE"
 
     Object.assign(row, input)
 
     if (input.statut === "TERMINEE") {
+      const kmSortie = input.kmSortie
+      if (kmSortie === undefined || kmSortie === null) {
+        throw badRequest("Le kilométrage de retour est obligatoire pour terminer le passage.")
+      }
       const date = new Date()
 
       row.dateSortieReelle = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
@@ -581,7 +595,7 @@ class MemoryPassageGarageRepo implements PassageGarageRepo {
 
             motif: row.motif,
 
-            kilometrage: vehicle.kilometrage,
+            kilometrage: kmSortie,
 
             date: date.toISOString(),
 
@@ -604,6 +618,16 @@ class MemoryPassageGarageRepo implements PassageGarageRepo {
           })
         }
       }
+      row.kmSortie = kmSortie
+      const returnMovement = this.data.mouvements.find(
+        (movement) =>
+          movement.passageId === row.id && movement.type === "RETOUR_GARAGE",
+      )
+      if (returnMovement) returnMovement.kilometrage = kmSortie
+      const vehicle = this.data.vehicules.find(
+        (item) => item.id === row.vehiculeId,
+      )
+      if (vehicle) vehicle.kilometrage = Math.max(vehicle.kilometrage, kmSortie)
     }
 
     return this.hydrate(row)
@@ -1013,7 +1037,7 @@ class MemoryCommercialRepo implements CommercialRepo {
 
       telephone: input.telephone || null,
 
-      email: input.email || null,
+      email: input.email?.trim() || null,
 
       agenceId: input.agenceId ?? null,
 
@@ -1062,7 +1086,7 @@ class MemoryCommercialRepo implements CommercialRepo {
 
         existing.telephone = input.telephone || null
 
-        existing.email = input.email || null
+        existing.email = input.email?.trim() || null
 
         existing.contact = [input.telephone, input.email]
           .filter(Boolean)
@@ -1105,7 +1129,7 @@ class MemoryCommercialRepo implements CommercialRepo {
 
       telephone: input.telephone || null,
 
-      email: input.email || null,
+      email: input.email?.trim() || null,
 
       contact: [input.telephone, input.email].filter(Boolean).join(" · "),
     })
@@ -1125,12 +1149,36 @@ class MemoryCommercialRepo implements CommercialRepo {
     return row
   }
 
-  async deactivate(id: number): Promise<boolean> {
-    const row = this.data.commerciaux.find((commercial) => commercial.id === id)
+  async remove(id: number): Promise<boolean> {
+    const index = this.data.commerciaux.findIndex((commercial) => commercial.id === id)
+    if (index < 0) return false
 
-    if (!row || row.actif === false) return false
+    const hasRestrictedReferences =
+      this.data.locations.some((location) => location.commercialId === id) ||
+      this.data.reservations.some((reservation) => reservation.commercialId === id)
+    if (hasRestrictedReferences) {
+      throw conflict(
+        "Ce commercial est associé à des données historiques (locations ou réservations) et ne peut pas être supprimé définitivement.",
+      )
+    }
 
-    row.actif = false
+    this.data.commerciaux.splice(index, 1)
+    for (const prolongation of this.data.prolongations) {
+      if (prolongation.commercialId === id) prolongation.commercialId = null
+    }
+    for (const vente of this.data.ventesVehicules) {
+      if (vente.commercialId === id) vente.commercialId = null
+    }
+    for (const contravention of this.data.contraventions) {
+      if (contravention.commercialId === id) {
+        contravention.commercialId = null
+        contravention.commercial = null
+      }
+    }
+    for (const mouvement of this.data.mouvements) {
+      if (mouvement.commercialId === id) mouvement.commercialId = null
+      if (mouvement.validateurId === id) mouvement.validateurId = null
+    }
 
     return true
   }
@@ -2369,6 +2417,8 @@ class MemoryMouvementRepo implements MouvementRepo {
         dateSortieReelle: null,
 
         kmEntree: input.kilometrage ?? null,
+
+        kmSortie: null,
 
         motif: input.motif ?? input.observation ?? null,
 

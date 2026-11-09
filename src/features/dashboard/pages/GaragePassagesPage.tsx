@@ -11,7 +11,7 @@ type PassageType = "REPARATION" | "REVISION" | "ENTRETIEN" | "VISITE_TECHNIQUE" 
 type PassageStatus = "EN_ATTENTE" | "EN_COURS" | "TERMINEE"
 interface Passage {
   id: number; typePassage: PassageType; dateEntree: string; dateSortiePrevue: string | null
-  dateSortieReelle: string | null; kmEntree: number | null; motif: string | null
+  dateSortieReelle: string | null; kmEntree: number | null; kmSortie: number | null; motif: string | null
   statut: PassageStatus; coutTotal: number; vehiculeId: number; garageId: number
   vehicule: string | null; garage: string | null; vehiculeRemplacementId: number | null
 }
@@ -102,6 +102,7 @@ export default function GaragePassagesPage() {
       { label: "Véhicule de remplacement", value: detail.vehiculeRemplacementId === null ? "—" : `#${detail.vehiculeRemplacementId}` },
       { label: "Date d'entrée", value: detail.dateEntree }, { label: "Sortie prévue", value: detail.dateSortiePrevue ?? "—" },
       { label: "Sortie réelle", value: detail.dateSortieReelle ?? "—" }, { label: "Kilométrage entrée", value: detail.kmEntree === null ? "—" : `${detail.kmEntree} km` },
+      { label: "Kilométrage retour", value: detail.kmSortie === null ? "—" : `${detail.kmSortie} km` },
       { label: "Motif", value: detail.motif ?? "—" }, { label: "Statut", value: detail.statut }, { label: "Coût total", value: `${detail.coutTotal.toLocaleString("fr-FR")} FCFA` },
     ]} close={() => setDetail(null)} />}
     {deleting && <div className="modal-backdrop"><div className="modal"><p className="kicker">CONFIRMATION</p><h2>Supprimer ce passage ?</h2><p>Cette action est définitive.</p><div className="modal-actions"><button className="secondary" onClick={() => setDeleting(null)}>Annuler</button><button className="danger" onClick={() => void remove()}>Supprimer</button></div></div></div>}
@@ -112,13 +113,21 @@ function PassageModal({ passage, garages, close, saved }: { passage: Passage; ga
   const [form, setForm] = useState({
     typePassage: passage?.typePassage ?? "REPARATION", dateEntree: dateTimeInput(passage?.dateEntree),
     dateSortiePrevue: dateTimeInput(passage?.dateSortiePrevue), dateSortieReelle: dateTimeInput(passage?.dateSortieReelle),
-    kmEntree: passage?.kmEntree == null ? "" : String(passage.kmEntree), motif: passage?.motif ?? "",
+    kmEntree: passage?.kmEntree == null ? "" : String(passage.kmEntree),
+    kmSortie: passage?.kmSortie == null ? "" : String(passage.kmSortie), motif: passage?.motif ?? "",
     statut: passage?.statut ?? "EN_COURS", coutTotal: String(passage?.coutTotal ?? 0),
     garageId: String(passage?.garageId ?? ""),
   })
   const [error, setError] = useState<string | null>(null)
+  const [completionModalOpen, setCompletionModalOpen] = useState(
+    passage.statut === "TERMINEE" && passage.kmSortie === null,
+  )
   const set = (key: string, value: string) => setForm((current) => ({ ...current, [key]: value }))
   const changeStatus = (value: PassageStatus) => {
+    if (value === "TERMINEE" && form.statut !== "TERMINEE") {
+      setCompletionModalOpen(true)
+      return
+    }
     setForm((current) => ({
       ...current,
       statut: value,
@@ -128,11 +137,18 @@ function PassageModal({ passage, garages, close, saved }: { passage: Passage; ga
   }
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError(null)
+    if (form.statut === "TERMINEE" &&
+      (form.kmSortie === "" || Number(form.kmSortie) < (passage.kmEntree ?? 0))) {
+      setCompletionModalOpen(true)
+      setError("Saisissez un kilométrage de retour valide.")
+      return
+    }
     try {
       await apiFetch(`/api/parc/passages-garage/${passage.id}`, { method: "PUT", body: {
         typePassage: form.typePassage, dateEntree: form.dateEntree, dateSortiePrevue: form.dateSortiePrevue || null, dateSortieReelle: form.statut === "TERMINEE" ? form.dateSortieReelle : null,
         kmEntree: form.kmEntree === "" ? null : Number(form.kmEntree), motif: form.motif.trim() || null, statut: form.statut, coutTotal: Number(form.coutTotal) || 0,
         garageId: Number(form.garageId),
+        ...(form.statut === "TERMINEE" && { kmSortie: Number(form.kmSortie) }),
       } }); close(); await saved()
       notifyDashboardMutation("Passage garage modifié avec succès.")
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Enregistrement impossible") }
@@ -147,5 +163,23 @@ function PassageModal({ passage, garages, close, saved }: { passage: Passage; ga
     <label><span>Statut</span><select value={form.statut} onChange={(e) => changeStatus(e.target.value as PassageStatus)}>{statuses.map((value) => <option key={value}>{value}</option>)}</select></label>
     <label><span>Coût total</span><input type="number" min="0" step="0.01" value={form.coutTotal} onChange={(e) => set("coutTotal", e.target.value)} /></label>
     <label><span>Motif</span><input value={form.motif} maxLength={255} onChange={(e) => set("motif", e.target.value)} /></label>
-  </div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={close}>Annuler</button><button className="primary small" type="submit">Enregistrer <Icon name="check" size={17} /></button></div></form></div>
+  </div>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={close}>Annuler</button><button className="primary small" type="submit">Enregistrer <Icon name="check" size={17} /></button></div></form>
+    {completionModalOpen && <div className="modal-backdrop"><form className="modal" onSubmit={(event) => {
+      event.preventDefault()
+      if (form.kmSortie === "" || Number(form.kmSortie) < (passage.kmEntree ?? 0)) {
+        setError("Saisissez un kilométrage de retour valide.")
+        return
+      }
+      setError(null)
+      setForm((current) => ({ ...current, statut: "TERMINEE", dateSortieReelle: currentDateTimeInput() }))
+      setCompletionModalOpen(false)
+    }}>
+      <button className="modal-close" type="button" onClick={() => setCompletionModalOpen(false)} aria-label="Fermer"><Icon name="close" /></button>
+      <p className="kicker">RETOUR DU GARAGE</p><h2>Renseigner le kilométrage de retour</h2>
+      {passage.kmEntree !== null && <p>Kilométrage à l'entrée : <strong>{passage.kmEntree.toLocaleString("fr-FR")} km</strong></p>}
+      <label><span>Kilométrage de retour</span><input type="number" min={passage.kmEntree ?? 0} value={form.kmSortie} onChange={(event) => set("kmSortie", event.target.value)} required autoFocus /></label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="modal-actions"><button type="button" className="secondary" onClick={() => setCompletionModalOpen(false)}>Annuler</button><button className="primary small" type="submit">Confirmer</button></div>
+    </form></div>}
+  </div>
 }
