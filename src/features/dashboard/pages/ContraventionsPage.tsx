@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom"
 
 import Icon from "@/shared/components/Icon"
 import DetailModal from "@/shared/components/DetailModal"
+import SearchableSelect from "@/shared/components/SearchableSelect"
 
 import { apiFetch } from "@/shared/api/client"
 
@@ -826,12 +827,12 @@ export default function ContraventionsPage() {
 
   return (
     <section className="data-card">
-      <div className="data-toolbar">
+      <div className="data-toolbar contraventions-toolbar">
         <div>
           <h2>Contraventions ANATT</h2>
           <p>{filtered.length} contravention(s)</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="contraventions-toolbar-actions">
           <input
             className="table-search"
             placeholder="Rechercher…"
@@ -1079,20 +1080,17 @@ export default function ContraventionsPage() {
               </label>
               <label>
                 <span>Véhicule</span>
-                <select
+                <SearchableSelect
                   required
                   value={draft.vehiculeId}
-                  onChange={(e) => updateDraft("vehiculeId", e.target.value)}
-                >
-                  <option value="">Sélectionner un véhicule</option>
-                  {options.vehicules
-                    .filter((item) => item.statut !== "SORTIE_DEFINITIVE")
-                    .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.immatriculation} · {item.vehicule}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => updateDraft("vehiculeId", value)}
+                  options={options.vehicules.map((item) => ({
+                    value: String(item.id),
+                    label: `${item.immatriculation} · ${item.vehicule} · ${item.statut}`,
+                    searchText: item.statut,
+                  }))}
+                  placeholder="Rechercher un véhicule…"
+                />
               </label>
               <label>
                 <span>Montant hors frais (XOF)</span>
@@ -1117,31 +1115,29 @@ export default function ContraventionsPage() {
               </label>
               <label>
                 <span>Client connu</span>
-                <select
+                <SearchableSelect
                   value={draft.clientId}
-                  onChange={(e) => updateDraft("clientId", e.target.value)}
-                >
-                  <option value="">Non renseigné / importé</option>
-                  {options.clients.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.nom}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => updateDraft("clientId", value)}
+                  options={options.clients.map((item) => ({
+                    value: String(item.id),
+                    label: item.nom,
+                  }))}
+                  placeholder="Rechercher un client…"
+                  emptyOptionLabel="Non renseigné / importé"
+                />
               </label>
               <label>
                 <span>Agent de vente connu</span>
-                <select
+                <SearchableSelect
                   value={draft.commercialId}
-                  onChange={(e) => updateDraft("commercialId", e.target.value)}
-                >
-                  <option value="">Non renseigné / importé</option>
-                  {options.commerciaux.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.nom}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => updateDraft("commercialId", value)}
+                  options={options.commerciaux.map((item) => ({
+                    value: String(item.id),
+                    label: item.nom,
+                  }))}
+                  placeholder="Rechercher un commercial…"
+                  emptyOptionLabel="Non renseigné / importé"
+                />
               </label>
               <label>
                 <span>Statut du paiement</span>

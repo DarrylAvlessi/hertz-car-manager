@@ -7,13 +7,18 @@ import { useOutletContext } from "react-router-dom"
 import Icon from "@/shared/components/Icon"
 
 import DetailModal from "@/shared/components/DetailModal"
+import SearchableSelect from "@/shared/components/SearchableSelect"
 
 import { apiFetch } from "@/shared/api/client"
 
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
+import { canUseVehicleForNewOperation } from "@/shared/data/vehicleStatus"
 
 import { downloadCsv } from "@/shared/data/csv"
 
+import TablePagination, {
+  TABLE_PAGE_SIZE,
+} from "../components/TablePagination"
 import DatePeriodFilter, {
   matchesDatePeriod,
   type DatePeriod,
@@ -214,6 +219,8 @@ export default function LocationsPage() {
 
   const [query, setQuery] = useState("")
 
+  const [page, setPage] = useState(1)
+
   const [statusFilter, setStatusFilter] = useState("")
 
   const [typeFilter, setTypeFilter] = useState("")
@@ -283,6 +290,21 @@ export default function LocationsPage() {
         matchesDatePeriod(row.dateDebut, datePeriod),
     )
   }, [rows, query, statusFilter, typeFilter, datePeriod])
+
+  const visibleRows = filteredRows.slice(
+    (page - 1) * TABLE_PAGE_SIZE,
+    page * TABLE_PAGE_SIZE,
+  )
+
+  useEffect(() => {
+    setPage(1)
+  }, [query, statusFilter, typeFilter, datePeriod])
+
+  useEffect(() => {
+    if (page > Math.max(1, Math.ceil(filteredRows.length / TABLE_PAGE_SIZE))) {
+      setPage(1)
+    }
+  }, [page, filteredRows.length])
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -647,11 +669,10 @@ export default function LocationsPage() {
             onChange={(event) => setStatusFilter(event.target.value)}
           >
             <option value="">Tous les statuts</option>
-            <option>En cours</option>
-            <option>À retourner</option>
-            <option>En prolongation</option>
-            <option>Retourné</option>
-            <option>Annulé</option>
+            <option value="EN_COURS">En cours</option>
+            <option value="EN_RETARD">En retard</option>
+            <option value="EN_PROLONGATION">En prolongation</option>
+            <option value="TERMINEE">Retourné</option>
           </select>
           <button className="primary small" onClick={() => open()}>
             <Icon name="plus" size={17} /> Ajouter
@@ -673,7 +694,7 @@ export default function LocationsPage() {
             </tr>
           </thead>
           <tbody>
-            {filteredRows.map((row) => (
+            {visibleRows.map((row) => (
               <tr key={row.id}>
                 <td>
                   <strong>{row.reference}</strong>
@@ -713,6 +734,11 @@ export default function LocationsPage() {
           </tbody>
         </table>
       </div>
+      <TablePagination
+        page={page}
+        total={filteredRows.length}
+        onChange={setPage}
+      />
       {form && (
         <div className="modal-backdrop">
           <form className="modal location-modal" onSubmit={save}>
@@ -737,56 +763,50 @@ export default function LocationsPage() {
               </label>
               <label>
                 <span>Client</span>
-                <select
+                <SearchableSelect
                   required
                   value={form.clientId}
-                  onChange={(e) =>
-                    setForm({ ...form, clientId: e.target.value })
-                  }
-                >
-                  <option value="">Sélectionner</option>
-                  {clients.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.nom ?? item.id}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => setForm({ ...form, clientId: value })}
+                  options={clients.map((item) => ({
+                    value: String(item.id),
+                    label: item.nom ?? String(item.id),
+                  }))}
+                  placeholder="Rechercher un client…"
+                />
+                <small>
+                  Une nouvelle location nécessite un véhicule en entrée au parc
+                  ou de retour.
+                </small>
               </label>
               <label>
                 <span>Véhicule</span>
-                <select
+                <SearchableSelect
                   required
                   value={form.vehiculeId}
-                  onChange={(e) =>
-                    setForm({ ...form, vehiculeId: e.target.value })
-                  }
-                >
-                  <option value="">Sélectionner</option>
-                  {vehicles
-                    .filter((item) => item.statut !== "SORTIE_DEFINITIVE")
-                    .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.immatriculation ?? item.id}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => setForm({ ...form, vehiculeId: value })}
+                  options={vehicles.map((item) => ({
+                    value: String(item.id),
+                    label: `${item.immatriculation ?? item.id} · ${item.statut ?? "STATUT INCONNU"}`,
+                    searchText: item.statut,
+                    disabled:
+                      editing?.vehiculeId !== item.id &&
+                      !canUseVehicleForNewOperation(item.statut),
+                  }))}
+                  placeholder="Rechercher un véhicule…"
+                />
               </label>
               <label>
                 <span>Commercial</span>
-                <select
+                <SearchableSelect
                   required
                   value={form.commercialId}
-                  onChange={(e) =>
-                    setForm({ ...form, commercialId: e.target.value })
-                  }
-                >
-                  <option value="">Sélectionner un commercial</option>
-                  {commercials.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.nom ?? item.id}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => setForm({ ...form, commercialId: value })}
+                  options={commercials.map((item) => ({
+                    value: String(item.id),
+                    label: item.nom ?? String(item.id),
+                  }))}
+                  placeholder="Rechercher un commercial…"
+                />
               </label>
               <label>
                 <span>Type</span>

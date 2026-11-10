@@ -6,6 +6,8 @@ import { createPortal } from "react-dom"
 
 import { apiFetch } from "@/shared/api/client"
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
+import SearchableSelect from "@/shared/components/SearchableSelect"
+import { canUseVehicleForNewOperation } from "@/shared/data/vehicleStatus"
 
 import type { DashboardModule } from "@/shared/data/types"
 
@@ -20,9 +22,9 @@ interface VehicleOption {
 
   immatriculation: string
 
-  marqueModele: string
+  marqueModele?: string
 
-  statut: string
+  statut?: string
 }
 
 interface CommercialOption {
@@ -502,65 +504,60 @@ export default function AddModal({
 
               <label>
                 <span>Client</span>
-                <select
+                <SearchableSelect
                   value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
+                  onChange={setClientId}
+                  options={clients.map((client) => ({
+                    value: String(client.id),
+                    label: client.nom,
+                  }))}
+                  placeholder="Rechercher un client…"
                   required={isLocation}
                   disabled={optionsLoading || (!isReservation && clients.length === 0)}
-                >
-                  <option value="">Sélectionner un client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.nom}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
 
               <label>
                 <span>Véhicule</span>
-                <select
+                <SearchableSelect
                   value={vehicleId}
-                  onChange={(e) => {
-                    setVehicleId(e.target.value)
-
+                  onChange={(value) => {
+                    setVehicleId(value)
                     setAvailability(null)
-
                     setAvailabilityError(null)
                   }}
+                  options={vehicles.map((vehicle) => ({
+                    value: String(vehicle.id),
+                    label: `${vehicle.immatriculation}${vehicle.marqueModele?.trim() ? ` · ${vehicle.marqueModele.trim()}` : ""} (${vehicle.statut ?? "STATUT INCONNU"})`,
+                    searchText: vehicle.statut ?? "",
+                    disabled: !canUseVehicleForNewOperation(vehicle.statut),
+                  }))}
+                  placeholder="Rechercher un véhicule…"
                   required
                   disabled={optionsLoading || vehicles.length === 0}
-                >
-                  <option value="">Sélectionner un véhicule</option>
-                  {vehicles
-                    .filter((vehicle) => vehicle.statut !== "SORTIE_DEFINITIVE")
-                    .map((vehicle) => (
-                    <option key={vehicle.id} value={vehicle.id}>
-                      {vehicle.immatriculation} · {vehicle.marqueModele} (
-                      {vehicle.statut})
-                    </option>
-                  ))}
-                </select>
+                />
+                <small>
+                  Une nouvelle location ou réservation nécessite un véhicule
+                  en entrée au parc ou de retour.
+                </small>
               </label>
 
               <label>
                 <span>Commercial</span>
-                <select
+                <SearchableSelect
                   value={commercialId}
-                  onChange={(e) => setCommercialId(e.target.value)}
+                  onChange={setCommercialId}
+                  options={commercials.map((commercial) => ({
+                    value: String(commercial.id),
+                    label: `${commercial.nom}${commercial.contact ? ` · ${commercial.contact}` : ""}`,
+                    searchText: commercial.contact,
+                  }))}
+                  placeholder="Rechercher un commercial…"
                   required={isLocation}
                   disabled={
                     optionsLoading || (!isReservation && commercials.length === 0)
                   }
-                >
-                  <option value="">Sélectionner un commercial</option>
-                  {commercials.map((commercial) => (
-                    <option key={commercial.id} value={commercial.id}>
-                      {commercial.nom}
-                      {commercial.contact ? ` · ${commercial.contact}` : ""}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
 
               {isReservation && (

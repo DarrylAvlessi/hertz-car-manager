@@ -2,7 +2,9 @@ import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { apiFetch } from "@/shared/api/client"
 import Icon from "@/shared/components/Icon"
+import SearchableSelect from "@/shared/components/SearchableSelect"
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
+import { canUseVehicleForNewOperation } from "@/shared/data/vehicleStatus"
 import type { ReservationFicheDto } from "@/shared/data/dashboardService"
 import { formatDateFr } from "@/shared/data/dashboardService"
 
@@ -261,16 +263,21 @@ export default function ReservationModal({
             <div className="modal-fields">
               <label>
                 <span>Client rattaché</span>
-                <select
+                <SearchableSelect
                   className={fieldClass}
                   value={draft.clientId}
-                  onChange={(event) => updateDraft("clientId", event.target.value)}
-                >
-                  <option value="">Aucun client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>{client.nom}</option>
-                  ))}
-                </select>
+                  onChange={(value) => updateDraft("clientId", value)}
+                  options={clients.map((client) => ({
+                    value: String(client.id),
+                    label: client.nom,
+                  }))}
+                  placeholder="Rechercher un client…"
+                  emptyOptionLabel="Aucun client"
+                />
+                <small>
+                  Un véhicule déjà sélectionné peut être conservé. Pour en
+                  choisir un autre, il doit être en entrée au parc ou de retour.
+                </small>
               </label>
               <label>
                 <span>Nom du client importé</span>
@@ -283,38 +290,36 @@ export default function ReservationModal({
               </label>
               <label>
                 <span>Véhicule</span>
-                <select
+                <SearchableSelect
                   className={fieldClass}
                   value={draft.vehiculeId}
-                  onChange={(event) => updateDraft("vehiculeId", event.target.value)}
+                  onChange={(value) => updateDraft("vehiculeId", value)}
+                  options={vehicles.map((vehicle) => ({
+                    value: String(vehicle.id),
+                    label: `${vehicle.immatriculation} · ${vehicle.marqueModele ??
+                      `${vehicle.marque ?? ""} ${vehicle.modele ?? ""}`.trim()} (${vehicle.statut ?? "STATUT INCONNU"})`,
+                    searchText: vehicle.statut,
+                    disabled:
+                      draft.vehiculeId !== String(vehicle.id) &&
+                      !canUseVehicleForNewOperation(vehicle.statut),
+                  }))}
+                  placeholder="Rechercher un véhicule…"
                   required
-                >
-                  <option value="">Sélectionner un véhicule</option>
-                  {vehicles
-                    .filter((vehicle) => vehicle.statut !== "SORTIE_DEFINITIVE")
-                    .map((vehicle) => (
-                    <option key={vehicle.id} value={vehicle.id}>
-                      {vehicle.immatriculation} ·{" "}
-                      {vehicle.marqueModele ??
-                        `${vehicle.marque ?? ""} ${vehicle.modele ?? ""}`.trim()}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label>
                 <span>Commercial rattaché</span>
-                <select
+                <SearchableSelect
                   className={fieldClass}
                   value={draft.commercialId}
-                  onChange={(event) =>
-                    updateDraft("commercialId", event.target.value)
-                  }
-                >
-                  <option value="">Aucun commercial</option>
-                  {commercials.map((commercial) => (
-                    <option key={commercial.id} value={commercial.id}>{commercial.nom}</option>
-                  ))}
-                </select>
+                  onChange={(value) => updateDraft("commercialId", value)}
+                  options={commercials.map((commercial) => ({
+                    value: String(commercial.id),
+                    label: commercial.nom,
+                  }))}
+                  placeholder="Rechercher un commercial…"
+                  emptyOptionLabel="Aucun commercial"
+                />
               </label>
               <label>
                 <span>Nom de l’agent importé</span>

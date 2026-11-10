@@ -36,6 +36,7 @@ import type {
   ReservationImportInput,
   ReservationUpdateInput,
 } from "../../repositories/types.js"
+import { canStartVehicleOperation } from "../vehicules/statusRules.js"
 
 const clientSchema = z.object({
   nom: z.string().trim().min(1).max(150),
@@ -1208,6 +1209,11 @@ export function listsRouter(repos: Repositories, env: Env): Router {
 
       if (clientId && !client) throw notFound("Client introuvable")
       if (!vehicle) throw notFound("Véhicule introuvable")
+      if (!canStartVehicleOperation(vehicle.statut)) {
+        throw conflict(
+          `La réservation est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
+        )
+      }
       if (commercialId && !commercial) {
         throw notFound("Commercial introuvable ou désactivé")
       }
@@ -1245,6 +1251,19 @@ export function listsRouter(repos: Repositories, env: Env): Router {
       const errors: string[] = []
 
       for (const { line, input } of rows) {
+        if (["À venir", "En cours"].includes(input.statut)) {
+          const vehicle = vehicles.find((item) => item.id === input.vehiculeId)
+          if (!vehicle) {
+            errors.push(`Ligne ${line} : véhicule introuvable.`)
+            continue
+          }
+          if (!canStartVehicleOperation(vehicle.statut)) {
+            errors.push(
+              `Ligne ${line} : réservation impossible, statut du véhicule ${vehicle.statut}.`,
+            )
+            continue
+          }
+        }
         if (input.statut !== "À venir" && input.statut !== "En cours") {
           continue
         }
@@ -1381,6 +1400,9 @@ export function listsRouter(repos: Repositories, env: Env): Router {
     [...guard, validateBody(reservationUpdateSchema)],
     asyncHandler(async (req, res) => {
       const input = req.body as ReservationUpdateInput
+      const id = idParam(req.params.id)
+      const current = await repos.reservations.get(id)
+      if (!current) throw notFound("Réservation introuvable")
       const [vehicle, client, commercial, maintenance] = await Promise.all([
         repos.vehicules.get(input.vehiculeId),
         input.clientId === null ? null : repos.clients.get(input.clientId),
@@ -1396,6 +1418,15 @@ export function listsRouter(repos: Repositories, env: Env): Router {
           : Promise.resolve([]),
       ])
       if (!vehicle) throw notFound("Véhicule introuvable")
+      if (
+        ["À venir", "En cours"].includes(current.statut) &&
+        current.vehiculeId !== input.vehiculeId &&
+        !canStartVehicleOperation(vehicle.statut)
+      ) {
+        throw conflict(
+          `La réservation est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
+        )
+      }
       if (input.clientId !== null && !client) throw notFound("Client introuvable")
       if (input.commercialId !== null && !commercial) {
         throw notFound("Commercial introuvable ou désactivé")
@@ -1405,7 +1436,7 @@ export function listsRouter(repos: Repositories, env: Env): Router {
       }
       try {
         const updated = await repos.reservations.update(
-          idParam(req.params.id),
+          id,
           input,
         )
         if (!updated) throw notFound("Réservation introuvable")
@@ -1463,6 +1494,16 @@ export function listsRouter(repos: Repositories, env: Env): Router {
 
       for (const [index, input] of inputs.entries()) {
         const line = Number(input.reference?.split("-").at(-1)) || index + 2
+        const vehicle = vehicles.find((item) => item.id === input.vehiculeId)
+        if (
+          input.statut !== "TERMINEE" &&
+          vehicle &&
+          !canStartVehicleOperation(vehicle.statut)
+        ) {
+          errors.push(
+            `Ligne ${line} : location impossible, statut du véhicule ${vehicle.statut}.`,
+          )
+        }
         const [overlapping, maintenance] = await Promise.all([
           repos.locations.overlapping(
             input.vehiculeId,
@@ -1535,6 +1576,14 @@ export function listsRouter(repos: Repositories, env: Env): Router {
       if (!client) throw notFound("Client introuvable")
 
       if (!vehicle) throw notFound("Véhicule introuvable")
+      if (
+        (req.body.statut ?? "EN_COURS") !== "TERMINEE" &&
+        !canStartVehicleOperation(vehicle.statut)
+      ) {
+        throw conflict(
+          `La location est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
+        )
+      }
 
       if (commercialId && !commercial)
         throw notFound("Commercial introuvable ou désactivé")
@@ -1661,11 +1710,27 @@ export function listsRouter(repos: Repositories, env: Env): Router {
     [...guard, validateBody(locationSchemaBase.partial())],
 
     asyncHandler(async (req, res) => {
-      const updated = await repos.locations.update(
-        Number(req.params.id),
-        req.body,
-      )
+      const id = Number(req.params.id)
+      const current = await repos.locations.get(id)
+      if (!current) throw notFound("Location introuvable")
+      const nextVehicleId = req.body.vehiculeId ?? current.vehiculeId
+      const nextStatus = req.body.statut ?? current.statut
+      const newActiveAssignment =
+        nextStatus !== "TERMINEE" &&
+        (current.statut === "TERMINEE" ||
+          nextVehicleId !== current.vehiculeId)
 
+      if (newActiveAssignment) {
+        const vehicle = await repos.vehicules.get(nextVehicleId)
+        if (!vehicle) throw notFound("Véhicule introuvable")
+        if (!canStartVehicleOperation(vehicle.statut)) {
+          throw conflict(
+            `La location est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
+          )
+        }
+      }
+
+      const updated = await repos.locations.update(id, req.body)
       if (!updated) throw notFound("Location introuvable")
 
       res.json(updated)

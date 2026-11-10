@@ -213,6 +213,12 @@ export default function GenericTablePage({
 
   const [page, setPage] = useState(1)
 
+  const [localSearch, setLocalSearch] = useState("")
+
+  const [statusFilter, setStatusFilter] = useState("")
+
+  const [statusSort, setStatusSort] = useState<"" | "asc" | "desc">("")
+
   const [localRefreshKey, setLocalRefreshKey] = useState(0)
 
   const [selectedRecord, setSelectedRecord] = useState<{
@@ -287,11 +293,50 @@ export default function GenericTablePage({
     }
   }, [module, refreshKey, localRefreshKey])
 
-  const filtered = useMemo(
-    () => (data ? filterTable(data, query) : null),
+  const filtered = useMemo(() => {
+    if (!data) return null
+    const base = filterTable(data, query)
+    if (module !== "Commerciaux" && module !== "Réservations") return base
 
-    [data, query],
-  )
+    const statusColumn = module === "Commerciaux" ? 4 : 11
+    const needle = localSearch
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLocaleLowerCase()
+    const rows = base.rows
+      .map((row, index) => ({ row, id: base.ids[index]! }))
+      .filter(({ row }) => {
+        const searchableText = row
+          .join(" ")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLocaleLowerCase()
+        return (
+          (!needle || searchableText.includes(needle)) &&
+          (!statusFilter || row[statusColumn] === statusFilter)
+        )
+      })
+
+    if (statusSort) {
+      const statusOrder =
+        module === "Commerciaux"
+          ? ["Excellent", "Très bien", "Bien", "À suivre"]
+          : ["À venir", "En cours", "Terminée", "Annulée"]
+      rows.sort((a, b) => {
+        const comparison =
+          statusOrder.indexOf(a.row[statusColumn] ?? "") -
+          statusOrder.indexOf(b.row[statusColumn] ?? "")
+        return statusSort === "asc" ? comparison : -comparison
+      })
+    }
+
+    return {
+      headers: base.headers,
+      rows: rows.map(({ row }) => row),
+      ids: rows.map(({ id }) => id),
+    }
+  }, [data, query, localSearch, statusFilter, statusSort, module])
 
   const managedModule: ManagedModule | null =
     module === "Clients" || module === "Commerciaux" ? module : null
@@ -304,7 +349,13 @@ export default function GenericTablePage({
 
   useEffect(() => {
     setPage(1)
-  }, [module, query])
+  }, [module, query, localSearch, statusFilter, statusSort])
+
+  useEffect(() => {
+    setLocalSearch("")
+    setStatusFilter("")
+    setStatusSort("")
+  }, [module])
 
   useEffect(() => {
     if (
@@ -897,6 +948,58 @@ export default function GenericTablePage({
           </button>
         </div>
       </div>
+      {(module === "Commerciaux" || module === "Réservations") && (
+        <div className="table-filters" aria-label="Filtres du tableau">
+          <input
+            className="table-search"
+            type="search"
+            placeholder={
+              module === "Commerciaux"
+                ? "Rechercher un commercial…"
+                : "Rechercher une réservation…"
+            }
+            aria-label={`Rechercher dans les ${module.toLowerCase()}`}
+            value={localSearch}
+            onChange={(event) => setLocalSearch(event.target.value)}
+          />
+          <select
+            className="secondary status-filter"
+            aria-label={
+              module === "Commerciaux"
+                ? "Filtrer par performance"
+                : "Filtrer par statut de réservation"
+            }
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="">
+              {module === "Commerciaux"
+                ? "Toutes les performances"
+                : "Tous les statuts"}
+            </option>
+            {(module === "Commerciaux"
+              ? ["Excellent", "Très bien", "Bien", "À suivre"]
+              : ["À venir", "En cours", "Terminée", "Annulée"]
+            ).map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+          <select
+            className="secondary status-filter"
+            aria-label="Trier par statut"
+            value={statusSort}
+            onChange={(event) =>
+              setStatusSort(event.target.value as "" | "asc" | "desc")
+            }
+          >
+            <option value="">Ordre par défaut</option>
+            <option value="asc">Statut croissant</option>
+            <option value="desc">Statut décroissant</option>
+          </select>
+        </div>
+      )}
       {csvError && (
         <p className="form-error" role="alert">
           {csvError}

@@ -3,6 +3,7 @@ import Icon from "@/shared/components/Icon"
 import DetailModal from "@/shared/components/DetailModal"
 import { apiFetch } from "@/shared/api/client"
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
+import SearchableSelect from "@/shared/components/SearchableSelect"
 
 type Row = {
   id: number
@@ -143,7 +144,7 @@ export default function ProlongationsPage() {
       <p className="kicker">PROLONGATION</p><h2>{editing ? "Modifier la prolongation" : "Ajouter une prolongation"}</h2>
       <div className="modal-fields">
         <label><span>Location</span><select required value={form.locationId} onChange={(event) => setForm({ ...form, locationId: event.target.value })}><option value="">Sélectionner une location</option>{locations.map((item) => <option key={item.id} value={item.id}>{item.reference ?? `Location #${item.id}`}</option>)}</select></label>
-        <label><span>Commercial</span><select value={form.commercialId} onChange={(event) => setForm({ ...form, commercialId: event.target.value })}><option value="">Aucun commercial</option>{commercials.map((item) => <option key={item.id} value={item.id}>{item.nom ?? item.id}</option>)}</select></label>
+        <label><span>Commercial</span><SearchableSelect value={form.commercialId} onChange={(value) => setForm({ ...form, commercialId: value })} options={commercials.map((item) => ({ value: String(item.id), label: item.nom ?? String(item.id) }))} placeholder="Rechercher un commercial…" emptyOptionLabel="Aucun commercial" /></label>
         <label><span>Ancienne date de fin</span><input type="datetime-local" value={form.ancienneDateFin} onChange={(event) => setForm({ ...form, ancienneDateFin: event.target.value })} /></label>
         <label><span>Date de demande</span><input type="datetime-local" required value={form.dateDemande} onChange={(event) => setForm({ ...form, dateDemande: event.target.value })} /></label>
         <label><span>Nouvelle date de fin</span><input type="datetime-local" required value={form.nouvelleDateFin} onChange={(event) => setForm({ ...form, nouvelleDateFin: event.target.value })} /></label>

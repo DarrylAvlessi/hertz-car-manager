@@ -7,10 +7,12 @@ import { useOutletContext } from "react-router-dom"
 import Icon from "@/shared/components/Icon"
 
 import DetailModal from "@/shared/components/DetailModal"
+import SearchableSelect from "@/shared/components/SearchableSelect"
 
 import { apiFetch } from "@/shared/api/client"
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 import { downloadCsv } from "@/shared/data/csv"
+import { canUseVehicleForNewOperation } from "@/shared/data/vehicleStatus"
 
 import type { DashboardOutletContext } from "../DashboardLayout"
 
@@ -49,6 +51,13 @@ interface CommercialOption {
   id: number
   nom: string
 }
+
+type GaragePassageType =
+  | "REPARATION"
+  | "REVISION"
+  | "ENTRETIEN"
+  | "VISITE_TECHNIQUE"
+  | "AUTRE"
 
 interface Vehicle {
   id: number
@@ -139,6 +148,13 @@ const vehicleStatuses = [
 const changeableVehicleStatuses = vehicleStatuses.filter(
   (status) => status !== "SORTIE_DEFINITIVE",
 )
+const garagePassageTypes: Array<{ value: GaragePassageType; label: string }> = [
+  { value: "REPARATION", label: "Réparation" },
+  { value: "REVISION", label: "Révision" },
+  { value: "ENTRETIEN", label: "Entretien" },
+  { value: "VISITE_TECHNIQUE", label: "Visite technique" },
+  { value: "AUTRE", label: "Autre" },
+]
 const deletableVehicleStatuses = new Set([
   "ENTREE_PARC",
   "RETOUR_LOCATION",
@@ -539,14 +555,16 @@ export default function VehiclePage() {
                   <td className="actions">
                     {vehicle.statut !== "SORTIE_DEFINITIVE" && (
                       <>
-                        <button
-                          className="action-status"
-                          title="Enregistrer une vente"
-                          aria-label={`Vendre ${vehicle.immatriculation}`}
-                          onClick={() => setSelling(vehicle)}
-                        >
-                          <Icon name="check" size={16} />
-                        </button>
+                        {canUseVehicleForNewOperation(vehicle.statut) && (
+                          <button
+                            className="action-status"
+                            title="Enregistrer une vente"
+                            aria-label={`Vendre ${vehicle.immatriculation}`}
+                            onClick={() => setSelling(vehicle)}
+                          >
+                            <Icon name="check" size={16} />
+                          </button>
+                        )}
                         <button
                           className="action-status"
                           title="Changer le statut"
@@ -746,6 +764,8 @@ function StatusModal({
   const [observation, setObservation] = useState("")
   const [kilometrage, setKilometrage] = useState(String(vehicle.kilometrage))
   const [garageId, setGarageId] = useState("")
+  const [typePassage, setTypePassage] =
+    useState<GaragePassageType>("REPARATION")
   const [locationType, setLocationType] = useState("Courte durée")
   const now = new Date()
   const defaultStart = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
@@ -822,6 +842,8 @@ function StatusModal({
               status === "ENVOI_GARAGE" && garageId
                 ? Number(garageId)
                 : undefined,
+            typePassage:
+              status === "ENVOI_GARAGE" ? typePassage : undefined,
             motif:
               status === "ENVOI_GARAGE"
                 ? observation.trim() || null
@@ -882,11 +904,23 @@ function StatusModal({
               required
             >
               {changeableVehicleStatuses.map((value) => (
-                <option key={value} value={value}>
+                <option
+                  key={value}
+                  value={value}
+                  disabled={
+                    ["MISE_EN_LOCATION", "ENVOI_GARAGE", "SORTIE_INTERNE", "RESERVATION"].includes(value) &&
+                    !canUseVehicleForNewOperation(vehicle.statut)
+                  }
+                >
                   {value}
                 </option>
               ))}
             </select>
+            <small>
+              Location, garage, sortie interne et réservation : disponibles
+              uniquement depuis un statut d’entrée ou de retour. La vente suit la
+              même règle.
+            </small>
           </label>
           {[
             "MISE_EN_LOCATION",
@@ -928,6 +962,22 @@ function StatusModal({
           {status === "ENVOI_GARAGE" && (
             <>
               <label>
+                <span>Type de passage</span>
+                <select
+                  value={typePassage}
+                  onChange={(event) =>
+                    setTypePassage(event.target.value as GaragePassageType)
+                  }
+                  required
+                >
+                  {garagePassageTypes.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 <span>Garage</span>
                 <select
                   value={garageId}
@@ -944,18 +994,16 @@ function StatusModal({
               </label>
               <label>
                 <span>Commercial responsable</span>
-                <select
+                <SearchableSelect
                   value={commercialId}
-                  onChange={(event) => setCommercialId(event.target.value)}
+                  onChange={setCommercialId}
+                  options={commercials.map((commercial) => ({
+                    value: String(commercial.id),
+                    label: commercial.nom,
+                  }))}
+                  placeholder="Rechercher un commercial…"
                   required
-                >
-                  <option value="">Sélectionner un commercial</option>
-                  {commercials.map((commercial) => (
-                    <option key={commercial.id} value={commercial.id}>
-                      {commercial.nom}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
             </>
           )}
@@ -974,33 +1022,29 @@ function StatusModal({
               </label>
               <label>
                 <span>Client</span>
-                <select
+                <SearchableSelect
                   value={clientId}
-                  onChange={(event) => setClientId(event.target.value)}
+                  onChange={setClientId}
+                  options={clients.map((client) => ({
+                    value: String(client.id),
+                    label: client.nom,
+                  }))}
+                  placeholder="Rechercher un client…"
                   required
-                >
-                  <option value="">Sélectionner un client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.nom}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label>
                 <span>Commercial responsable</span>
-                <select
+                <SearchableSelect
                   value={commercialId}
-                  onChange={(event) => setCommercialId(event.target.value)}
+                  onChange={setCommercialId}
+                  options={commercials.map((commercial) => ({
+                    value: String(commercial.id),
+                    label: commercial.nom,
+                  }))}
+                  placeholder="Rechercher un commercial…"
                   required
-                >
-                  <option value="">Sélectionner un commercial</option>
-                  {commercials.map((commercial) => (
-                    <option key={commercial.id} value={commercial.id}>
-                      {commercial.nom}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label>
                 <span>Début de location</span>
@@ -1026,18 +1070,16 @@ function StatusModal({
             <>
               <label>
                 <span>Commercial responsable</span>
-                <select
+                <SearchableSelect
                   value={commercialId}
-                  onChange={(event) => setCommercialId(event.target.value)}
+                  onChange={setCommercialId}
+                  options={commercials.map((commercial) => ({
+                    value: String(commercial.id),
+                    label: commercial.nom,
+                  }))}
+                  placeholder="Rechercher un commercial…"
                   required
-                >
-                  <option value="">Sélectionner un commercial</option>
-                  {commercials.map((commercial) => (
-                    <option key={commercial.id} value={commercial.id}>
-                      {commercial.nom}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label>
                 <span>Motif de la sortie interne</span>
@@ -1054,31 +1096,29 @@ function StatusModal({
             <>
               <label>
                 <span>Client</span>
-                <select
+                <SearchableSelect
                   value={clientId}
-                  onChange={(event) => setClientId(event.target.value)}
-                >
-                  <option value="">Client non rapproché</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.nom}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setClientId}
+                  options={clients.map((client) => ({
+                    value: String(client.id),
+                    label: client.nom,
+                  }))}
+                  placeholder="Rechercher un client…"
+                  emptyOptionLabel="Client non rapproché"
+                />
               </label>
               <label>
                 <span>Commercial responsable</span>
-                <select
+                <SearchableSelect
                   value={commercialId}
-                  onChange={(event) => setCommercialId(event.target.value)}
-                >
-                  <option value="">Commercial non rapproché</option>
-                  {commercials.map((commercial) => (
-                    <option key={commercial.id} value={commercial.id}>
-                      {commercial.nom}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setCommercialId}
+                  options={commercials.map((commercial) => ({
+                    value: String(commercial.id),
+                    label: commercial.nom,
+                  }))}
+                  placeholder="Rechercher un commercial…"
+                  emptyOptionLabel="Commercial non rapproché"
+                />
               </label>
               <label>
                 <span>Date de réservation</span>
@@ -1544,18 +1584,16 @@ function SaleModal({
             </label>
             <label>
               <span>Acheteur *</span>
-              <select
+              <SearchableSelect
                 required
                 value={form.acheteurId}
-                onChange={(event) => set("acheteurId", event.target.value)}
-              >
-                <option value="">Sélectionner un acheteur</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.nom}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => set("acheteurId", value)}
+                options={clients.map((client) => ({
+                  value: String(client.id),
+                  label: client.nom,
+                }))}
+                placeholder="Rechercher un acheteur…"
+              />
             </label>
             <label>
               <span>Date et heure de vente *</span>
@@ -1656,17 +1694,16 @@ function SaleModal({
             </label>
             <label>
               <span>Vendeur</span>
-              <select
+              <SearchableSelect
                 value={form.commercialId}
-                onChange={(event) => set("commercialId", event.target.value)}
-              >
-                <option value="">Non renseigné</option>
-                {commercials.map((commercial) => (
-                  <option key={commercial.id} value={commercial.id}>
-                    {commercial.nom}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => set("commercialId", value)}
+                options={commercials.map((commercial) => ({
+                  value: String(commercial.id),
+                  label: commercial.nom,
+                }))}
+                placeholder="Rechercher un commercial…"
+                emptyOptionLabel="Non renseigné"
+              />
             </label>
             <label>
               <span>Kilométrage à la vente</span>

@@ -27,6 +27,10 @@ import type {
   VehiculeInput,
   VehiculeStatut,
 } from "../../repositories/types.js"
+import {
+  canStartVehicleOperation,
+  STATUTS_NOUVELLES_OPERATIONS,
+} from "./statusRules.js"
 
 const STATUTS: VehiculeStatut[] = [
   "ENTREE_PARC",
@@ -163,6 +167,14 @@ const statutSchema = z
         code: z.ZodIssueCode.custom,
         path: ["commercialId"],
         message: "Un commercial responsable est requis pour un envoi au garage",
+      })
+    }
+
+    if (value.statut === "ENVOI_GARAGE" && value.typePassage === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["typePassage"],
+        message: "Le type de passage est requis pour un envoi au garage",
       })
     }
 
@@ -869,6 +881,11 @@ export function vehiculesRouter(repos: Repositories, env: Env): Router {
       if (vehicle.statut === "SORTIE_DEFINITIVE")
         throw conflict("Ce véhicule est déjà sorti définitivement")
 
+      if (!canStartVehicleOperation(vehicle.statut))
+        throw conflict(
+          `La vente est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
+        )
+
       if (!(await repos.clients.get(req.body.acheteurId)))
         throw notFound("Acheteur introuvable")
 
@@ -917,6 +934,15 @@ export function vehiculesRouter(repos: Repositories, env: Env): Router {
         throw conflict(
           "Un véhicule sorti définitivement ne peut plus changer de statut",
         )
+
+      if (
+        STATUTS_NOUVELLES_OPERATIONS.has(req.body.statut) &&
+        !canStartVehicleOperation(vehicle.statut)
+      ) {
+        throw conflict(
+          `Une nouvelle opération est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
+        )
+      }
 
       if (
         req.body.statut === "ENVOI_GARAGE" &&

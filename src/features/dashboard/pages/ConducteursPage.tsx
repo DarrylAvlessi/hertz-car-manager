@@ -5,6 +5,7 @@ import type { ChangeEvent, FormEvent } from "react"
 import { useOutletContext } from "react-router-dom"
 
 import DetailModal from "@/shared/components/DetailModal"
+import SearchableSelect from "@/shared/components/SearchableSelect"
 
 import Icon from "@/shared/components/Icon"
 
@@ -603,22 +604,18 @@ function DriverModal({
           </label>
           <label>
             <span>Client associé</span>
-            <select
+            <SearchableSelect
               value={form.clientId}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  clientId: event.target.value,
-                }))
+              onChange={(value) =>
+                setForm((current) => ({ ...current, clientId: value }))
               }
-            >
-              <option value="">Aucun client</option>
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.nom}
-                </option>
-              ))}
-            </select>
+              options={clients.map((client) => ({
+                value: String(client.id),
+                label: client.nom,
+              }))}
+              placeholder="Rechercher un client…"
+              emptyOptionLabel="Aucun client"
+            />
           </label>
         </div>
         {error && <p className="form-error">{error}</p>}
