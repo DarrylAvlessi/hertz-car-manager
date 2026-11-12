@@ -25,7 +25,7 @@ import type {
 } from "../types.js"
 
 export interface SeedData {
-  admin: AdminRecord
+  admins: AdminRecord[]
   agences: Agence[]
   categories: CategorieVehicule[]
   modeles: ModeleVehicule[]
@@ -48,13 +48,17 @@ export interface SeedData {
 
 export async function buildSeedData(): Promise<SeedData> {
   return {
-    admin: {
-      id: 1,
-      nom: "Koffi Orou",
-      email: "responsable@hertz.bj",
-      role: "responsable",
-      passwordHash: await hashPassword("hertz2025"),
-    },
+    admins: [
+      {
+        id: 1,
+        nom: "Orou",
+        prenom: "Koffi",
+        email: "responsable@hertz.bj",
+        role: "responsable",
+        active: true,
+        passwordHash: await hashPassword("hertz2025"),
+      },
+    ],
     agences: [
       { id: 1, code: "APS", nom: "Agence principale", adresse: null, telephone: null, actif: true },
       { id: 2, code: "AEP", nom: "Agence Aéroport", adresse: null, telephone: null, actif: true },

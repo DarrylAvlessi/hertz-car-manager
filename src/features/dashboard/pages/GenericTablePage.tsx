@@ -933,14 +933,14 @@ export default function GenericTablePage({
                 hidden
                 onChange={(event) => void importClientsCsv(event)}
               />
-              <button
+              {/* <button
                 type="button"
                 className="secondary"
                 onClick={printFiche}
                 disabled={filtered.ids.length === 0}
               >
                 <Icon name="print" size={17} /> Imprimer une fiche
-              </button>
+              </button> */}
             </>
           )}
           <button className="primary small" onClick={onAdd}>

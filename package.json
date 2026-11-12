@@ -18,7 +18,8 @@
     "migrate:contraventions": "npm run db:migrate-contraventions --prefix server",
     "migrate:garage-timestamps": "npm run db:migrate-garage-timestamps --prefix server",
     "migrate:sale-timestamps": "npm run db:migrate-sale-timestamps --prefix server",
-    "migrate:internal-exits": "npm run db:migrate-internal-exits --prefix server"
+    "migrate:internal-exits": "npm run db:migrate-internal-exits --prefix server",
+    "migrate:admin-roles": "npm run db:migrate-admin-roles --prefix server"
   },
   "dependencies": {
     "gsap": "^3.15.0",

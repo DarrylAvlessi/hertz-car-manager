@@ -1,5 +1,7 @@
 import type {
   Admin,
+  AdminCreateInput,
+  AdminProfileInput,
   AdminRecord,
   AdminRepo,
   Agence,
@@ -119,17 +121,79 @@ function localDateTimeNow(): string {
 class MemoryAdminRepo implements AdminRepo {
   constructor(private data: SeedData) {}
 
+  async list(): Promise<Admin[]> {
+    return this.data.admins.map(({ passwordHash: _hash, ...admin }) => ({
+      ...admin,
+    }))
+  }
+
   async findByEmail(email: string): Promise<AdminRecord | null> {
-    return this.data.admin.email.toLowerCase() === email.trim().toLowerCase()
-      ? this.data.admin
-      : null
+    return (
+      this.data.admins.find(
+        (admin) =>
+          admin.active &&
+          admin.email.toLowerCase() === email.trim().toLowerCase(),
+      ) ?? null
+    )
   }
 
   async findById(id: number): Promise<Admin | null> {
-    if (this.data.admin.id !== id) return null
+    const admin = this.data.admins.find(
+      (candidate) => candidate.id === id && candidate.active,
+    )
+    if (!admin) return null
 
-    const { passwordHash: _hash, ...safe } = this.data.admin
+    const { passwordHash: _hash, ...safe } = admin
 
+    return safe
+  }
+
+  async findRecordById(id: number): Promise<AdminRecord | null> {
+    const admin = this.data.admins.find(
+      (candidate) => candidate.id === id && candidate.active,
+    )
+    return admin ? { ...admin } : null
+  }
+
+  async updateProfile(
+    id: number,
+    input: AdminProfileInput,
+  ): Promise<Admin | null> {
+    const admin = this.data.admins.find(
+      (candidate) => candidate.id === id && candidate.active,
+    )
+    if (!admin) return null
+
+    admin.nom = input.nom
+    admin.prenom = input.prenom
+    admin.email = input.email
+    if (input.passwordHash) admin.passwordHash = input.passwordHash
+
+    const { passwordHash: _hash, ...safe } = admin
+    return safe
+  }
+
+  async create(input: AdminCreateInput): Promise<Admin> {
+    if (
+      this.data.admins.some(
+        (admin) => admin.email.toLowerCase() === input.email.toLowerCase(),
+      )
+    ) {
+      throw conflict("Cette adresse e-mail est déjà utilisée")
+    }
+
+    const admin: AdminRecord = {
+      id: Math.max(0, ...this.data.admins.map((existing) => existing.id)) + 1,
+      nom: input.nom,
+      prenom: input.prenom,
+      email: input.email,
+      role: input.role,
+      active: true,
+      passwordHash: input.passwordHash,
+    }
+    this.data.admins.push(admin)
+
+    const { passwordHash: _hash, ...safe } = admin
     return safe
   }
 }

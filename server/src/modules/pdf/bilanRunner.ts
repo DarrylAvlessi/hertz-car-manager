@@ -79,7 +79,7 @@ export async function generateBilanPdf(
     }
 
     const { stdout, stderr } = await execFileAsync(pythonExec, args, {
-      timeout: 45000,
+      timeout: 120000,
       windowsHide: true,
     })
     if (stderr && stderr.trim().length > 0) {

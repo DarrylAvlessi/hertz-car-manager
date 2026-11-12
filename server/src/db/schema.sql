@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS administrateur (
   login              VARCHAR(60)  NOT NULL UNIQUE,
   mot_de_passe_hash  VARCHAR(255) NOT NULL,
   actif              BOOLEAN      NOT NULL DEFAULT TRUE,
+  role               ENUM('responsable', 'admin', 'superadmin') NOT NULL DEFAULT 'responsable',
   date_creation      DATE         NOT NULL DEFAULT (CURRENT_DATE)
 ) ENGINE=InnoDB;
 

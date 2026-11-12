@@ -105,6 +105,8 @@ export interface LocationFicheDto {
 
   vehicule: string
 
+  vehiculeId?: number
+
   type: string
 
   dateDebut?: string
@@ -158,6 +160,30 @@ export interface ReservationFicheDto {
   statutPaiement?: "NON_PAYEE" | "PAYEE"
 
   statut: string
+}
+
+export interface DueActivityNotification {
+  id: string
+
+  message: string
+
+  deadline: string
+
+  deadlineLabel: string
+}
+
+interface GaragePassageNotificationDto {
+  id: number
+
+  typePassage: string
+
+  dateSortiePrevue: string | null
+
+  statut: string
+
+  vehiculeId: number
+
+  vehicule: string | null
 }
 
 export interface ClientFicheDto {
@@ -226,6 +252,105 @@ export function formatDateFr(iso: string): string {
   const [y, m, d] = iso.split("-")
 
   return `${d}/${m}/${y}`
+}
+
+function activityDateTimestamp(value: string): number | null {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  const timestamp = dateOnly
+    ? new Date(
+        Number(dateOnly[1]),
+        Number(dateOnly[2]) - 1,
+        Number(dateOnly[3]),
+      ).getTime()
+    : Date.parse(value.replace(" ", "T"))
+
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+
+function activityDateLabel(value: string): string {
+  const timestamp = activityDateTimestamp(value)
+  if (timestamp === null) return value
+
+  const hasTime = /[T ]\d{2}:\d{2}/.test(value)
+  return new Intl.DateTimeFormat("fr-FR", {
+    dateStyle: "short",
+    ...(hasTime ? { timeStyle: "short" as const } : {}),
+  }).format(timestamp)
+}
+
+export async function fetchDueActivityNotifications(
+  now = Date.now(),
+): Promise<DueActivityNotification[]> {
+  const [locations, reservations, passages] = await Promise.all([
+    apiFetch<LocationFicheDto[]>("/api/locations"),
+    apiFetch<ReservationFicheDto[]>("/api/reservations"),
+    apiFetch<GaragePassageNotificationDto[]>("/api/parc/passages-garage"),
+  ])
+  const notifications: DueActivityNotification[] = []
+
+  for (const location of locations) {
+    if (
+      !["EN_COURS", "EN_RETARD", "EN_PROLONGATION"].includes(location.statut)
+    ) {
+      continue
+    }
+
+    const deadline = activityDateTimestamp(location.dateFin)
+    if (deadline === null || deadline > now) continue
+
+    const vehicle = location.vehicule.trim() || `véhicule #${location.vehiculeId ?? "?"}`
+    notifications.push({
+      id: `location-${location.id}`,
+      message: `Retour de la location ${location.reference} arrivé à échéance pour le véhicule ${vehicle}.`,
+      deadline: location.dateFin,
+      deadlineLabel: activityDateLabel(location.dateFin),
+    })
+  }
+
+  for (const passage of passages) {
+    if (
+      passage.statut === "TERMINEE" ||
+      passage.dateSortiePrevue === null
+    ) {
+      continue
+    }
+
+    const deadline = activityDateTimestamp(passage.dateSortiePrevue)
+    if (deadline === null || deadline > now) continue
+
+    const vehicle = passage.vehicule?.trim() || `véhicule #${passage.vehiculeId}`
+    notifications.push({
+      id: `garage-${passage.id}`,
+      message: `La sortie prévue du garage (${passage.typePassage}) est arrivée à échéance pour le véhicule ${vehicle}.`,
+      deadline: passage.dateSortiePrevue,
+      deadlineLabel: activityDateLabel(passage.dateSortiePrevue),
+    })
+  }
+
+  for (const reservation of reservations) {
+    if (!["À venir", "En cours"].includes(reservation.statut)) continue
+    if (!reservation.dateFin) continue
+
+    const deadline = activityDateTimestamp(reservation.dateFin)
+    if (deadline === null || deadline > now) continue
+
+    const vehicle =
+      [reservation.immatriculation, reservation.vehicule]
+        .filter((part) => part.trim())
+        .join(" — ") || `véhicule #${reservation.vehiculeId ?? "?"}`
+    notifications.push({
+      id: `reservation-${reservation.id}`,
+      message: `La fin de la réservation ${reservation.reference} est arrivée à échéance pour le véhicule ${vehicle}.`,
+      deadline: reservation.dateFin,
+      deadlineLabel: activityDateLabel(reservation.dateFin),
+    })
+  }
+
+  return notifications.sort(
+    (a, b) =>
+      (activityDateTimestamp(a.deadline) ?? 0) -
+      (activityDateTimestamp(b.deadline) ?? 0),
+  )
 }
 
 export function formatDuree(jours: number): string {

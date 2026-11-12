@@ -107,11 +107,34 @@ COLOR_CHART_GRID  = colors.HexColor('#E8E8E3')  # Grille des graphiques
 COLOR_WHITE       = colors.HexColor('#FFFFFF')
 
 HEX_BRAND      = '#FFCC00'
+HEX_RED        = '#D9534F'
+HEX_GREEN      = '#2E9D50'
 HEX_DARK       = '#222222'
 HEX_BORDER     = '#DCDCD6'
 HEX_MUTED      = '#6B6B66'
 HEX_GRID       = '#E8E8E3'
 HEX_CARD_BG    = '#F4F4F1'
+
+
+def progress_colors(values):
+    """Color each chart value relative to the other values in that chart."""
+    if not values:
+        return []
+    low = min(values)
+    high = max(values)
+    if low == high:
+        return [HEX_BRAND] * len(values)
+
+    colors_list = []
+    for value in values:
+        relative = (value - low) / (high - low)
+        if relative <= 1 / 3:
+            colors_list.append(HEX_RED)
+        elif relative <= 2 / 3:
+            colors_list.append(HEX_BRAND)
+        else:
+            colors_list.append(HEX_GREEN)
+    return colors_list
 
 PAGE_WIDTH, PAGE_HEIGHT = A4  # 210 x 297 mm en points
 MARGIN_X = 15 * mm
@@ -355,7 +378,7 @@ class ChartGenerator:
         ca_m = [v / 1_000_000.0 for v in ca_mensuel]
         cum_m = [v / 1_000_000.0 for v in ca_cumule]
 
-        bars = ax1.bar(x, ca_m, width=0.58, color=HEX_BRAND, zorder=2, label="CA mensuel (M F CFA)")
+        bars = ax1.bar(x, ca_m, width=0.58, color=progress_colors(ca_m), zorder=2, label="CA mensuel (M F CFA)")
         ax1.set_ylabel("CA mensuel (M F CFA)", fontsize=7, fontfamily='Montserrat', color=HEX_MUTED)
         ax1.set_ylim(0, max(ca_m + [1]) * 1.25)
         ax1.set_xticks(x)
@@ -430,8 +453,7 @@ class ChartGenerator:
         amts_rev = amounts[::-1]
         y_rev = np.arange(len(cats_rev))
 
-        bar_colors = [HEX_BRAND] * len(cats_rev)
-        bar_colors[-1] = HEX_DARK
+        bar_colors = progress_colors(amts_rev)
 
         bars = ax.barh(y_rev, amts_rev, height=0.62, color=bar_colors, zorder=2)
         ax.set_yticks(y_rev)
@@ -464,8 +486,7 @@ class ChartGenerator:
         amts_rev = amounts[::-1]
         y = np.arange(len(lbls_rev))
 
-        bar_colors = [HEX_BRAND] * len(lbls_rev)
-        bar_colors[-1] = HEX_DARK
+        bar_colors = progress_colors(amts_rev)
 
         bars = ax.barh(y, amts_rev, height=0.62, color=bar_colors, zorder=2)
         ax.set_yticks(y)
@@ -498,8 +519,7 @@ class ChartGenerator:
         parts_rev = parts[::-1]
         y = np.arange(len(lbls_rev))
 
-        bar_colors = [HEX_BRAND] * len(lbls_rev)
-        bar_colors[-1] = HEX_DARK
+        bar_colors = progress_colors(parts_rev)
 
         bars = ax.barh(y, parts_rev, height=0.60, color=bar_colors, zorder=2)
         ax.set_yticks(y)
@@ -566,9 +586,9 @@ class ChartGenerator:
         immo = np.array(split_dict['Immobilisés'])
         dispo = np.array(split_dict['Disponibles'])
 
-        ax.bar(x, loues, width=0.58, color=HEX_BRAND, zorder=2, label="Loués")
-        ax.bar(x, immo, width=0.58, bottom=loues, color=HEX_DARK, zorder=2, label="Immobilisés")
-        ax.bar(x, dispo, width=0.58, bottom=loues + immo, color=HEX_BORDER, zorder=2, label="Disponibles")
+        ax.bar(x, loues, width=0.58, color=HEX_GREEN, zorder=2, label="Loués")
+        ax.bar(x, immo, width=0.58, bottom=loues, color=HEX_RED, zorder=2, label="Immobilisés")
+        ax.bar(x, dispo, width=0.58, bottom=loues + immo, color=HEX_BRAND, zorder=2, label="Disponibles")
 
         ax.set_ylim(0, 100)
         ax.set_xticks(x)
@@ -594,8 +614,7 @@ class ChartGenerator:
         taux_rev = taux_list[::-1]
         y = np.arange(len(cats_rev))
 
-        bar_colors = [HEX_BRAND] * len(cats_rev)
-        bar_colors[-1] = HEX_DARK
+        bar_colors = progress_colors(taux_rev)
 
         bars = ax.barh(y, taux_rev, height=0.60, color=bar_colors, zorder=2)
         ax.set_yticks(y)
@@ -624,7 +643,7 @@ class ChartGenerator:
         fig, ax1 = self._setup_fig(180, 62)
         x = np.arange(len(labels))
 
-        bars = ax1.bar(x, rotation_list, width=0.58, color=HEX_BRAND, zorder=2, label="Rotation (loc./véh.)")
+        bars = ax1.bar(x, rotation_list, width=0.58, color=progress_colors(rotation_list), zorder=2, label="Rotation (loc./véh.)")
         ax1.set_ylabel("Rotation (loc./véh.)", fontsize=7, fontfamily='Montserrat', color=HEX_MUTED)
         ax1.set_ylim(0, max(rotation_list + [1]) * 1.25)
         ax1.set_xticks(x)
@@ -669,7 +688,7 @@ class ChartGenerator:
         fig, ax = self._setup_fig(88, 56)
         x = np.arange(len(bins_labels))
 
-        bars = ax.bar(x, counts, width=0.58, color=HEX_BRAND, zorder=2)
+        bars = ax.bar(x, counts, width=0.58, color=progress_colors(counts), zorder=2)
         ax.set_xticks(x)
         ax.set_xticklabels(bins_labels, fontsize=6.8, fontfamily='Montserrat', color=HEX_DARK)
         ax.set_ylim(0, max(counts + [1]) * 1.25)

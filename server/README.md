@@ -26,6 +26,13 @@ Un token expiré ou invalide est supprimé du navigateur et l'utilisateur est
 redirigé vers `/connexion`. Les réponses HTTP `401` déclenchent le même
 nettoyage pendant l'utilisation de l'application.
 
+L'avatar du header ouvre le profil administrateur pour modifier le prénom, le
+nom et l'adresse e-mail. Pour changer le mot de passe, il faut confirmer
+l'actuel ; le nouveau est haché avec bcrypt avant son enregistrement.
+Les rôles disponibles sont `responsable`, `admin` et `superadmin`. Le rôle
+`superadmin` accède à tous les modules et peut consulter ou créer des comptes
+depuis `/dashboard/administrateurs`.
+
 La base existante contient déjà ses données : ne lancez ni `db:migrate` ni
 `db:import-parc` dessus. `db:migrate` refuse désormais toute base qui contient
 déjà des tables, vues, procédures, triggers ou événements. Le dépôt MySQL prend
@@ -43,6 +50,17 @@ via `cmd.exe` afin que la redirection `<` soit interprétée par l'invite Window
 ```powershell
 cmd.exe /c "mysql -h 127.0.0.1 -u hertz -p gestion_location_hertz < src\db\migrations\001_allow_non_overlapping_rentals.sql"
 ```
+
+Pour activer les rôles administrateur sur une base déjà existante, lancez depuis
+la racine du dépôt :
+
+```powershell
+npm run migrate:admin-roles
+```
+
+Cette migration idempotente ajoute `administrateur.role` et conserve les
+comptes existants avec le rôle `responsable`. Les nouvelles bases obtiennent
+cette colonne directement via `schema.sql`.
 
 Pour une base existante, appliquez les colonnes de suivi facturation/paiement
 des locations depuis la racine du dépôt :
@@ -135,6 +153,7 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | `npm run db:migrate-reservation-lifecycle` | convertit les statuts de réservation existants et met à jour les triggers/vues pour le nouveau cycle de vie |
 | `npm run db:migrate-reservation-lost-affairs` | crée une affaire perdue lors d'une annulation et prépare son export CSV |
 | `npm run db:migrate-contraventions` | ajoute les colonnes d'import requises par le module Contraventions |
+| `npm run db:migrate-admin-roles` | ajoute les rôles `responsable`, `admin` et `superadmin` aux comptes existants |
 | `npm run db:import-parc` | importe le jeu agents/parc une seule fois, avec contrôles et transaction |
 
 ## API (base `/api`, JWT Bearer sauf `/health`)
@@ -144,6 +163,8 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | GET     | `/health`                              | —    | statut + driver actif                    |
 | POST    | `/auth/login` `{email,password}`       | —    | → `{token, user}`                        |
 | GET     | `/auth/me`                             | auth | profil du token                          |
+| PUT     | `/auth/me`                             | auth | mise à jour du profil et du mot de passe |
+| GET/POST | `/admins`                              | superadmin | liste et création des comptes administrateurs |
 | GET/POST | `/parc/categories`                    | resp | liste et création des catégories véhicule |
 | PUT/DELETE | `/parc/categories/:id`              | resp | modification et suppression d’une catégorie |
 | GET/POST | `/parc/modeles`                       | resp | liste et création des modèles véhicule |
@@ -192,4 +213,5 @@ Conventions d'erreur : `{error, details}` avec 400 (zod), 401, 403, 404, 409, 50
 
 ## Comptes démo
 
-- `responsable@hertz.bj` / `hertz2025` (rôle `responsable`, seedé).
+- Sur une base neuve uniquement : `responsable@hertz.bj` / `hertz2025` (rôle
+  `responsable`, seedé). Le profil peut ensuite être modifié depuis l'avatar.

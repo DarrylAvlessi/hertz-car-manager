@@ -4,19 +4,45 @@
 
 // toujours du camelCase, quel que soit le driver (memory | mysql).
 
-export type Role = "responsable" | "admin"
+export type Role = "responsable" | "admin" | "superadmin"
 
 export interface Admin {
   id: number
 
   nom: string
 
+  prenom: string
+
   email: string
 
   role: Role
+
+  active: boolean
 }
 
 export interface AdminRecord extends Admin {
+  passwordHash: string
+}
+
+export interface AdminProfileInput {
+  nom: string
+
+  prenom: string
+
+  email: string
+
+  passwordHash?: string
+}
+
+export interface AdminCreateInput extends AdminProfileInput {
+  nom: string
+
+  prenom: string
+
+  email: string
+
+  role: Role
+
   passwordHash: string
 }
 
@@ -787,9 +813,17 @@ export interface SinistreImmobilisation {
 // --- Contrats repositories (implémentés en memory/ et mysql/) ---
 
 export interface AdminRepo {
+  list(): Promise<Admin[]>
+
   findByEmail(email: string): Promise<AdminRecord | null>
 
   findById(id: number): Promise<Admin | null>
+
+  findRecordById(id: number): Promise<AdminRecord | null>
+
+  updateProfile(id: number, input: AdminProfileInput): Promise<Admin | null>
+
+  create(input: AdminCreateInput): Promise<Admin>
 }
 
 export interface VehiculeRepo {

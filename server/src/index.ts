@@ -4,6 +4,7 @@ import { loadEnv } from "./config/env.js"
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js"
 import { repositories } from "./repositories/index.js"
 import { authRouter } from "./modules/auth/routes.js"
+import { adminsRouter } from "./modules/admins/routes.js"
 import { vehiculesRouter } from "./modules/vehicules/routes.js"
 import { listsRouter } from "./modules/lists/routes.js"
 import { contraventionsRouter } from "./modules/contraventions/routes.js"
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   )
 
   app.use("/api/auth", authRouter(repos, env))
+  app.use("/api/admins", adminsRouter(repos, env))
   app.use("/api/parc", parcRouter(repos, env))
   app.use("/api/vehicules", vehiculesRouter(repos, env))
   app.use("/api/contraventions", contraventionsRouter(repos, env))

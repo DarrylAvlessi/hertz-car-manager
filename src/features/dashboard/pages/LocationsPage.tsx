@@ -126,6 +126,8 @@ const locationCsvHeaders = [
   "Observation",
 
   "Type de location",
+
+  "Statut",
 ]
 
 function csvDate(value: string | null | undefined): string {
@@ -484,6 +486,8 @@ export default function LocationsPage() {
         "Location professionnelle",
 
         "Courte durée",
+
+        "EN_COURS",
       ],
       [
         "HERTZ BENIN",
@@ -498,8 +502,12 @@ export default function LocationsPage() {
         "Non",
         "N/A",
         "COMM-002",
+
         "Déplacement professionnel",
+
         "Longue durée",
+
+        "TERMINEE",
       ],
     ])
   }
@@ -542,6 +550,8 @@ export default function LocationsPage() {
       location.observation ?? "",
 
       location.type,
+
+      location.statut,
     ])
 
     const suffix = exportMode === "range" ? `-${exportStartDate}-au-${exportEndDate}` : ""

@@ -1,7 +1,15 @@
+const EXCEL_DATE_VALUE =
+  /^(?:\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/
+
 export function csvCell(value: string | number): string {
   const text = String(value)
+  const excelSafeText = EXCEL_DATE_VALUE.test(text.trim())
+    ? `="${text}"`
+    : text
 
-  return /[;",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  return /[;",\r\n]/.test(excelSafeText)
+    ? `"${excelSafeText.replace(/"/g, '""')}"`
+    : excelSafeText
 }
 
 export function downloadCsv(
@@ -65,5 +73,11 @@ export function parseCsv(text: string): string[][] {
     if (row.some((value) => value.trim() !== "")) rows.push(row)
   }
 
-  return rows
+  return rows.map((row) =>
+    row.map((value) => {
+      const formulaDate = /^="(.*)"$/.exec(value)?.[1]
+      const candidate = value.startsWith("'") ? value.slice(1) : formulaDate ?? value
+      return EXCEL_DATE_VALUE.test(candidate.trim()) ? candidate : value
+    }),
+  )
 }

@@ -31,6 +31,7 @@ import {
 } from "@/features/dashboard/pages/ModuleRoutes"
 
 import NotFoundPage from "@/shared/pages/NotFoundPage"
+import AdminAccountsPage from "@/features/dashboard/pages/AdminAccountsPage"
 
 export const router = createBrowserRouter([
   { path: "/", element: <HomePage /> },
@@ -84,6 +85,8 @@ export const router = createBrowserRouter([
       { path: "conducteurs", element: <ConducteursRoute /> },
 
       { path: "statistiques", element: <StatistiquesRoute /> },
+
+      { path: "administrateurs", element: <AdminAccountsPage /> },
     ],
   },
 

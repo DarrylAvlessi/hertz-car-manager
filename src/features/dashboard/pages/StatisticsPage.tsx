@@ -93,11 +93,26 @@ interface BilanReport {
 }
 
 const SERIES = {
+  red: "#D9534F",
   yellow: "#FFCC00",
+  green: "#2E9D50",
   ink: "#222222",
   gray: "#DCDCD6",
   grid: "#E8E8E3",
   muted: "#6B6B66",
+}
+
+function progressColors(values: number[]): string[] {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (!values.length || min === max) return values.map(() => SERIES.yellow)
+
+  return values.map((value) => {
+    const relative = (value - min) / (max - min)
+    if (relative <= 1 / 3) return SERIES.red
+    if (relative <= 2 / 3) return SERIES.yellow
+    return SERIES.green
+  })
 }
 
 const money = (value: number) =>
@@ -414,7 +429,11 @@ export default function StatisticsPage() {
                     formatter={(value, name) => [`${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} M F CFA`, name === "caMillions" ? "CA mensuel" : "CA cumulé"]}
                   />
                   <Legend formatter={(value) => value === "caMillions" ? "CA mensuel" : "CA cumulé"} />
-                  <Bar yAxisId="ca" dataKey="caMillions" fill={SERIES.yellow} name="caMillions" />
+                  <Bar yAxisId="ca" dataKey="caMillions" name="caMillions">
+                    {progressColors(monthlyRevenue.map((month) => month.caMillions)).map((fill, index) => (
+                      <Cell key={monthlyRevenue[index]!.label} fill={fill} />
+                    ))}
+                  </Bar>
                   <Line yAxisId="cumule" data={monthlyRevenue.map((month, index) => ({ ...month, cumulative: cumulativeRevenue[index] }))} dataKey="cumulative" stroke={SERIES.ink} strokeWidth={2} dot={{ r: 3 }} name="cumulative" />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -446,7 +465,11 @@ export default function StatisticsPage() {
                   <XAxis type="number" tickFormatter={(value) => `${value} M`} tick={{ fontSize: 10 }} />
                   <YAxis type="category" dataKey="name" width={125} tick={{ fontSize: 10 }} />
                   <Tooltip formatter={(value) => `${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} M F CFA`} contentStyle={tooltipStyle} />
-                  <Bar dataKey="value" fill={SERIES.yellow} />
+                  <Bar dataKey="value">
+                    {progressColors(report.ca_categories.map(([, value]) => value)).map((fill, index) => (
+                      <Cell key={report.ca_categories[index]![0]} fill={fill} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -459,7 +482,11 @@ export default function StatisticsPage() {
                   <XAxis type="number" tickFormatter={(value) => `${value} M`} tick={{ fontSize: 10 }} />
                   <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 9 }} />
                   <Tooltip formatter={(value) => `${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} M F CFA`} contentStyle={tooltipStyle} />
-                  <Bar dataKey="revenue" fill={SERIES.yellow} />
+                  <Bar dataKey="revenue">
+                    {progressColors(vehicleRevenue.map((vehicle) => vehicle.revenue)).map((fill, index) => (
+                      <Cell key={vehicleRevenue[index]!.name} fill={fill} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -528,11 +555,11 @@ export default function StatisticsPage() {
                   <CartesianGrid stroke={SERIES.grid} vertical={false} />
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                   <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} tick={{ fontSize: 10 }} />
-                  <Tooltip formatter={(value) => percent(Number(value))} contentStyle={tooltipStyle} />
+                  <Tooltip formatter={(value, name) => percent(Number(value), name === "immobilized" ? 3 : 1)} contentStyle={tooltipStyle} />
                   <Legend />
-                  <Bar dataKey="rented" stackId="days" name="Loués" fill={SERIES.yellow} />
-                  <Bar dataKey="immobilized" stackId="days" name="Immobilisés" fill={SERIES.ink} />
-                  <Bar dataKey="available" stackId="days" name="Disponibles non loués" fill={SERIES.gray} />
+                  <Bar dataKey="rented" stackId="days" name="Loués" fill={SERIES.green} />
+                  <Bar dataKey="immobilized" stackId="days" name="Immobilisés" fill={SERIES.red} />
+                  <Bar dataKey="available" stackId="days" name="Disponibles non loués" fill={SERIES.yellow} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -545,7 +572,11 @@ export default function StatisticsPage() {
                   <XAxis type="number" domain={[0, 100]} tickFormatter={(value) => `${value}%`} tick={{ fontSize: 10 }} />
                   <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 10 }} />
                   <Tooltip formatter={(value) => percent(Number(value))} contentStyle={tooltipStyle} />
-                  <Bar dataKey="value" fill={SERIES.yellow} />
+                  <Bar dataKey="value">
+                    {progressColors(report.utilisation_categories.map(([, value]) => value)).map((fill, index) => (
+                      <Cell key={report.utilisation_categories[index]![0]} fill={fill} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -576,7 +607,11 @@ export default function StatisticsPage() {
                   <YAxis yAxisId="locations" orientation="right" tick={{ fontSize: 10 }} />
                   <Tooltip contentStyle={tooltipStyle} />
                   <Legend />
-                  <Bar yAxisId="rotation" dataKey="rotation" name="Locations / véhicule" fill={SERIES.yellow} />
+                  <Bar yAxisId="rotation" dataKey="rotation" name="Locations / véhicule">
+                    {progressColors(monthlyRotation.map((month) => month.rotation)).map((fill, index) => (
+                      <Cell key={monthlyRotation[index]!.label} fill={fill} />
+                    ))}
+                  </Bar>
                   <Line yAxisId="locations" dataKey="locationsCurve" name="Nombre de locations" stroke={SERIES.ink} strokeWidth={2} dot={{ r: 3 }} />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -590,7 +625,11 @@ export default function StatisticsPage() {
                   <XAxis dataKey="name" tick={{ fontSize: 10 }} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 10 }} />
                   <Tooltip contentStyle={tooltipStyle} />
-                  <Bar dataKey="count" fill={SERIES.yellow} />
+                  <Bar dataKey="count">
+                    {progressColors(report.histogramme_locations.map(([, count]) => count)).map((fill, index) => (
+                      <Cell key={report.histogramme_locations[index]![0]} fill={fill} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>

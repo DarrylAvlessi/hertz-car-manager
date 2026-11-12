@@ -150,6 +150,25 @@ function parseLocationCsvDate(value: string, endOfDay = false): string | null {
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}${time}`
 }
 
+function parseLocationCsvStatus(
+  value: string,
+): NonNullable<LocationInput["statut"]> | null {
+  const status = normalizeCsvLookup(value).replace(/[^A-Z0-9]/g, "")
+  if (!status) return "EN_COURS"
+
+  const statuses: Record<string, NonNullable<LocationInput["statut"]>> = {
+    ENCOURS: "EN_COURS",
+    TERMINE: "TERMINEE",
+    TERMINEE: "TERMINEE",
+    RETOURNE: "TERMINEE",
+    RETOURNEE: "TERMINEE",
+    ENRETARD: "EN_RETARD",
+    ENPROLONGATION: "EN_PROLONGATION",
+  }
+
+  return statuses[status] ?? null
+}
+
 function parseLocationCsvAmount(value: string): number | null {
   const text = value.trim().replace(/[\s\u00a0\u202f]/g, "")
   if (!text) return 0
@@ -315,6 +334,8 @@ function parseLocationCsv(
         : normalizeCsvLookup(rawType).includes("LONGUE")
           ? "Longue durée"
           : null
+    const rawStatus = get(values, "STATUT")
+    const status = parseLocationCsvStatus(rawStatus)
     const observation = get(values, "OBSERVATION")
 
     if (!clientName) rowErrors.push("nom du client obligatoire")
@@ -347,6 +368,11 @@ function parseLocationCsv(
       rowErrors.push(`commercial « ${commercialName} » introuvable`)
     }
     if (!type) rowErrors.push(`type de location « ${rawType} » invalide`)
+    if (status === null) {
+      rowErrors.push(
+        `statut « ${rawStatus} » invalide (EN_COURS, TERMINEE, EN_RETARD, EN_PROLONGATION)`,
+      )
+    }
     if (observation.length > 255) {
       rowErrors.push("observation limitée à 255 caractères")
     }
@@ -378,7 +404,7 @@ function parseLocationCsv(
       dateDebut: start!,
       dateFin: end!,
       montant: amount!,
-      statut: "EN_COURS",
+      statut: status ?? "EN_COURS",
       observation: observation || null,
       modePaiement: modePaiement || null,
       referenceFacture: referenceFacture || null,

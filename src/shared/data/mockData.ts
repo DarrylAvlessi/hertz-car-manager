@@ -14,5 +14,6 @@ export const MODULE_ICONS: Record<string, string> = {
   Contraventions: "ticket",
   Clients: "client",
   Conducteurs: "driver",
+  Administrateurs: "shield",
   Statistiques: "stats",
 }

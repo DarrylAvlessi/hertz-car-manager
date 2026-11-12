@@ -71,6 +71,8 @@ const icons: Record<string, ReactNode> = {
     </>
   ),
 
+  shield: <path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" />,
+
   stats: (
     <>
       <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />

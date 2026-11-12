@@ -22,7 +22,7 @@ authentification JWT et données servies par API (driver mémoire ou MySQL).
 
 - **Runtime :** Express 4 + TypeScript strict (dev via `tsx`, build `tsc`)
 - **Base :** MySQL 8 (`mysql2`) **ou** mémoire seedée (`DB_DRIVER`, voir ci-dessous)
-- **Auth :** JWT (`jsonwebtoken`) + bcrypt (`bcryptjs`), rôles `responsable` / `admin`
+- **Auth :** JWT (`jsonwebtoken`) + bcrypt (`bcryptjs`), rôles `responsable` / `admin` / `superadmin`
 - **Validation :** `zod` · **PDF :** `pdfkit` (fiches clients, rapports d'activité)
 
 ## Prérequis
@@ -33,6 +33,31 @@ authentification JWT et données servies par API (driver mémoire ou MySQL).
   le backend démarre sans MySQL en mode mémoire (`DB_DRIVER=memory`, données démo).
 
 ## Démarrage
+
+### Démarrage automatique sous Windows / Laragon
+
+Pour démarrer l'application à chaque ouverture de votre session Windows, ouvrez
+PowerShell une seule fois dans le dossier du projet et exécutez :
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
+```
+
+Cette installation enregistre une tâche Windows et démarre les services tout de
+suite. À chaque ouverture de session par la suite, Laragon démarre MySQL, puis le
+frontend sur `http://localhost:8443` et l'API sur le port `3101`. Vous n'aurez
+plus à lancer les commandes npm. Les journaux de démarrage sont conservés dans
+`logs/`. Si MySQL n'est pas encore prêt ou si un service ne démarre pas, Windows
+réessaie automatiquement toutes les minutes (jusqu'à 60 fois). Il faut ouvrir
+une session Windows pour que la tâche s'exécute.
+
+Pour supprimer le démarrage automatique, exécutez dans PowerShell :
+
+```powershell
+Unregister-ScheduledTask -TaskName "Hertz Car Manager Local" -Confirm:$false
+```
+
+### Démarrage manuel
 
 ```bash
 npm install
@@ -90,13 +115,18 @@ server/             # backend Express (voir server/README.md : API, contrat Abel
 | `/dashboard/reservations`  | protégé | Réservations (abouties / en attente / non abouties) |
 | `/dashboard/clients`       | protégé | Fiches clients + impression                |
 | `/dashboard/statistiques`  | protégé | CA mensuel, utilisation, rotation         |
+| `/dashboard/administrateurs` | super admin | Consultation et création des comptes administrateurs |
 | `*`                        | public  | Page 404                                  |
 
 ## Authentification
 
 Authentification **JWT via le backend** (`POST /api/auth/login`) : `AuthContext` stocke le token
 (`hertz-auth-token`) et le profil (`hertz-auth-user`), `ProtectedRoute` redirige vers `/connexion`
-si non connecté. Compte démo seedé : `responsable@hertz.bj` / `hertz2025`.
+si non connecté. L'avatar du header ouvre l'édition du prénom, du nom et de l'adresse e-mail ;
+le mot de passe actuel est vérifié avant changement et le nouveau mot de passe est haché côté serveur.
+Le super administrateur a accès à tous les modules et peut consulter ou créer des comptes
+administrateurs depuis `/dashboard/administrateurs`.
+Compte initial de démonstration sur une base neuve : `responsable@hertz.bj` / `hertz2025`.
 
 ## Données
 

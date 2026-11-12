@@ -42,4 +42,6 @@ export const ROUTES = {
   conducteurs: "/dashboard/conducteurs",
 
   statistiques: "/dashboard/statistiques",
+
+  administrateurs: "/dashboard/administrateurs",
 } as const

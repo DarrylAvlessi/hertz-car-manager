@@ -16,10 +16,15 @@ import { useAuth } from "@/features/auth/AuthContext"
 
 import { dashboardMutationEventName } from "@/shared/components/dashboardNotifications"
 
-import { fetchOverviewStats } from "@/shared/data/dashboardService"
+import {
+  fetchDueActivityNotifications,
+  fetchOverviewStats,
+} from "@/shared/data/dashboardService"
+import type { DueActivityNotification } from "@/shared/data/dashboardService"
 import { gsap } from "gsap"
 
 import AddModal from "./components/AddModal"
+import ProfileModal from "./components/ProfileModal"
 
 import type { DashboardModule } from "@/shared/data/types"
 
@@ -62,6 +67,8 @@ const NAV: Array<{
   { label: "Conducteurs", to: ROUTES.conducteurs },
 
   { label: "Statistiques", to: ROUTES.statistiques },
+
+  { label: "Administrateurs", to: ROUTES.administrateurs },
 ]
 
 const FLEET_NAV = [
@@ -87,6 +94,39 @@ const RENTAL_NAV = [
 
   { label: "Prolongations", to: ROUTES.prolongations },
 ] as const
+
+const DISMISSED_ACTIVITY_NOTIFICATIONS_KEY =
+  "hertz-car-manager-dismissed-activity-notifications"
+
+function readDismissedActivityNotificationIds(): Set<string> {
+  try {
+    const stored = window.localStorage.getItem(
+      DISMISSED_ACTIVITY_NOTIFICATIONS_KEY,
+    )
+    if (!stored) return new Set()
+
+    const parsed: unknown = JSON.parse(stored)
+    if (
+      Array.isArray(parsed) &&
+      parsed.every((id): id is string => typeof id === "string")
+    ) {
+      return new Set(parsed)
+    }
+
+    console.error("Les notifications masquées enregistrées sont invalides.")
+  } catch (error: unknown) {
+    console.error("Impossible de lire les notifications masquées.", error)
+  }
+
+  return new Set()
+}
+
+function saveDismissedActivityNotificationIds(ids: Set<string>) {
+  window.localStorage.setItem(
+    DISMISSED_ACTIVITY_NOTIFICATIONS_KEY,
+    JSON.stringify([...ids]),
+  )
+}
 
 function formatCurrentDate(date: Date): string {
   return new Intl.DateTimeFormat("fr-FR", {
@@ -126,7 +166,49 @@ export default function DashboardLayout() {
 
   const [reservationCountError, setReservationCountError] =
     useState<string | null>(null)
+  const [dueActivityNotifications, setDueActivityNotifications] = useState<
+    DueActivityNotification[]
+  >([])
+  const dismissedActivityNotificationIds = useRef(
+    readDismissedActivityNotificationIds(),
+  )
+  const [notificationsLoading, setNotificationsLoading] = useState(true)
+  const [notificationError, setNotificationError] = useState<string | null>(
+    null,
+  )
+  const [notificationPersistenceError, setNotificationPersistenceError] =
+    useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [logoutConfirmationOpen, setLogoutConfirmationOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+
+  const persistDismissedActivityNotifications = () => {
+    try {
+      saveDismissedActivityNotificationIds(
+        dismissedActivityNotificationIds.current,
+      )
+      setNotificationPersistenceError(false)
+    } catch (error: unknown) {
+      console.error("Impossible d’enregistrer les notifications masquées.", error)
+      setNotificationPersistenceError(true)
+    }
+  }
+
+  const dismissNotification = (id: string) => {
+    dismissedActivityNotificationIds.current.add(id)
+    setDueActivityNotifications((notifications) =>
+      notifications.filter((notification) => notification.id !== id),
+    )
+    persistDismissedActivityNotifications()
+  }
+
+  const dismissAllNotifications = () => {
+    for (const notification of dueActivityNotifications) {
+      dismissedActivityNotificationIds.current.add(notification.id)
+    }
+    setDueActivityNotifications([])
+    persistDismissedActivityNotifications()
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -201,6 +283,64 @@ export default function DashboardLayout() {
       window.removeEventListener(dashboardMutationEventName(), handleMutation)
     }
   }, [location.pathname])
+
+  useEffect(() => {
+    let active = true
+
+    const refreshNotifications = async () => {
+      try {
+        const notifications = await fetchDueActivityNotifications()
+        if (!active) return
+
+        const activeNotificationIds = new Set(
+          notifications.map((notification) => notification.id),
+        )
+        let removedStaleDismissals = false
+        for (const id of dismissedActivityNotificationIds.current) {
+          if (!activeNotificationIds.has(id)) {
+            dismissedActivityNotificationIds.current.delete(id)
+            removedStaleDismissals = true
+          }
+        }
+        if (removedStaleDismissals) {
+          persistDismissedActivityNotifications()
+        }
+
+        setDueActivityNotifications(
+          notifications.filter(
+            (notification) =>
+              !dismissedActivityNotificationIds.current.has(notification.id),
+          ),
+        )
+        setNotificationError(null)
+      } catch (error: unknown) {
+        if (!active) return
+
+        setNotificationError(
+          error instanceof Error
+            ? error.message
+            : "Les notifications sont indisponibles.",
+        )
+      } finally {
+        if (active) setNotificationsLoading(false)
+      }
+    }
+
+    const refresh = () => void refreshNotifications()
+    const eventName = dashboardMutationEventName()
+    const timer = window.setInterval(refresh, 60_000)
+
+    window.addEventListener(eventName, refresh)
+    window.addEventListener("focus", refresh)
+    refresh()
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener(eventName, refresh)
+      window.removeEventListener("focus", refresh)
+    }
+  }, [])
 
   const [modal, setModal] = useState(false)
 
@@ -282,6 +422,7 @@ export default function DashboardLayout() {
     "Ventes de véhicules",
 
     "Prolongations",
+    "Administrateurs",
   ].includes(module)
 
   const outletContext: DashboardOutletContext = useMemo(
@@ -340,7 +481,11 @@ export default function DashboardLayout() {
         </div>
         <p className="nav-label">ESPACE DE GESTION</p>
         <nav>
-          {NAV.map((item) => {
+          {NAV.filter(
+            (item) =>
+              item.label !== "Administrateurs" ||
+              user?.role === "superadmin",
+          ).map((item) => {
             const isActive =
               item.to === ROUTES.overview
                 ? location.pathname === ROUTES.overview
@@ -467,10 +612,10 @@ export default function DashboardLayout() {
           </div>
         </nav>
         <div className="sidebar-user">
-          <span>{user?.initials ?? "KO"}</span>
+          <span>{user?.initials ?? "AD"}</span>
           <div>
-            <strong>{user?.name ?? "Koffi Orou"}</strong>
-            <small>Responsable Hertz</small>
+            <strong>{user?.name ?? "Administrateur"}</strong>
+            <small>{user?.roleLabel ?? "Responsable Hertz"}</small>
           </div>
           <button
             onClick={() => setLogoutConfirmationOpen(true)}
@@ -505,15 +650,104 @@ export default function DashboardLayout() {
             />
           </label>
           <div>
-            <button className="bell" aria-label="Notifications">
-              <Icon name="bell" />
-              <i />
-            </button>
-            <span className="dash-avatar">{user?.initials ?? "KO"}</span>
-            <div>
-              <strong>{user?.name ?? "Koffi Orou"}</strong>
-              <small>Administrateur</small>
+            <div className="notification-area">
+              <button
+                className="bell"
+                type="button"
+                aria-label={`Notifications : ${dueActivityNotifications.length}`}
+                aria-expanded={notificationsOpen}
+                aria-controls="due-notifications-panel"
+                onClick={() => setNotificationsOpen((open) => !open)}
+              >
+                <Icon name="bell" />
+                {dueActivityNotifications.length > 0 && (
+                  <span className="notification-count">
+                    {dueActivityNotifications.length > 99
+                      ? "99+"
+                      : dueActivityNotifications.length}
+                  </span>
+                )}
+              </button>
+              {notificationsOpen && (
+                <section
+                  className="notification-panel"
+                  id="due-notifications-panel"
+                  aria-label="Notifications d’échéance"
+                >
+                  <div className="notification-panel-header">
+                    <strong>Échéances arrivées</strong>
+                    <span>{dueActivityNotifications.length}</span>
+                    {dueActivityNotifications.length > 0 && (
+                      <button
+                        className="notification-dismiss-all"
+                        type="button"
+                        onClick={dismissAllNotifications}
+                      >
+                        Tout supprimer
+                      </button>
+                    )}
+                  </div>
+                  {notificationError && (
+                    <p className="notification-panel-error" role="alert">
+                      Impossible de charger les notifications :{" "}
+                      {notificationError}
+                    </p>
+                  )}
+                  {notificationPersistenceError && (
+                    <p className="notification-panel-error" role="alert">
+                      Les notifications sont masquées jusqu’au rechargement,
+                      mais leur suppression n’a pas pu être mémorisée.
+                    </p>
+                  )}
+                  {notificationsLoading ? (
+                    <p className="notification-panel-empty">
+                      Chargement des échéances…
+                    </p>
+                  ) : dueActivityNotifications.length === 0 ? (
+                    <p className="notification-panel-empty">
+                      Aucune échéance n’est arrivée.
+                    </p>
+                  ) : (
+                    <ul>
+                      {dueActivityNotifications.map((notification) => (
+                        <li key={notification.id}>
+                          <button
+                            className="notification-dismiss"
+                            type="button"
+                            aria-label={`Supprimer : ${notification.message}`}
+                            title="Supprimer cette notification"
+                            onClick={() =>
+                              dismissNotification(notification.id)
+                            }
+                          >
+                            <Icon name="trash" size={15} />
+                          </button>
+                          <div className="notification-content">
+                            <p>{notification.message}</p>
+                            <small>
+                              Échéance : {notification.deadlineLabel}
+                            </small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )}
             </div>
+            <button
+              className="header-profile"
+              type="button"
+              onClick={() => setProfileOpen(true)}
+              aria-label="Modifier mon profil"
+              title="Modifier mon profil"
+            >
+              <span className="dash-avatar">{user?.initials ?? "AD"}</span>
+              <div>
+                <strong>{user?.name ?? "Administrateur"}</strong>
+                <small>{user?.roleLabel ?? "Administrateur"}</small>
+              </div>
+            </button>
           </div>
         </header>
 
@@ -561,6 +795,15 @@ export default function DashboardLayout() {
           module={module}
           close={() => setModal(false)}
           onCreated={() => setRefreshKey((current) => current + 1)}
+        />
+      )}
+      {profileOpen && (
+        <ProfileModal
+          close={() => setProfileOpen(false)}
+          saved={() => {
+            setProfileOpen(false)
+            setSuccessMessage("Profil mis à jour avec succès.")
+          }}
         />
       )}
       {logoutConfirmationOpen && (

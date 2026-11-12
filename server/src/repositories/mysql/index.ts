@@ -1,8 +1,10 @@
 import type mysql from "mysql2/promise"
-import { badRequest } from "../../lib/httpErrors.js"
+import { badRequest, conflict } from "../../lib/httpErrors.js"
 
 import type {
   Admin,
+  AdminCreateInput,
+  AdminProfileInput,
   AdminRecord,
   AdminRepo,
   Agence,
@@ -68,6 +70,7 @@ import type {
   ReservationInput,
   ReservationUpdateInput,
   ReservationRepo,
+  Role,
   StatsRepo,
   Vehicule,
   VehiculeInput,
@@ -96,6 +99,14 @@ const strNull = (v: unknown): string | null =>
 
 const numNull = (v: unknown): number | null =>
   v === null || v === undefined ? null : Number(v)
+
+function mapAdminRole(value: unknown): Role {
+  const role = String(value)
+  if (role === "responsable" || role === "admin" || role === "superadmin") {
+    return role
+  }
+  throw new Error(`Rôle administrateur MySQL inconnu : ${role}`)
+}
 
 function mapClientType(value: unknown): Client["type"] {
   switch (String(value).toUpperCase()) {
@@ -606,12 +617,32 @@ const MONTHLY_REFERENCE: MonthlyPoint[] = [
 class MysqlAdminRepo implements AdminRepo {
   constructor(private pool: mysql.Pool) {}
 
+  async list(): Promise<Admin[]> {
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT id_administrateur AS id, nom, prenom, email,
+              role, actif AS active
+         FROM administrateur
+        ORDER BY prenom, nom, id_administrateur`,
+    )
+
+    return rows.map((row) => ({
+      id: num(row.id),
+      nom: str(row.nom),
+      prenom: str(row.prenom),
+      email: str(row.email),
+      role: mapAdminRole(row.role),
+      active: Boolean(row.active),
+    }))
+  }
+
   async findByEmail(email: string): Promise<AdminRecord | null> {
     const rows = await query<Row>(
       this.pool,
 
-      `SELECT id_administrateur AS id, CONCAT_WS(' ', prenom, nom) AS nom,
-              email, mot_de_passe_hash AS password_hash
+      `SELECT id_administrateur AS id, nom, prenom,
+              email, role, actif AS active,
+              mot_de_passe_hash AS password_hash
          FROM administrateur
         WHERE email = ? AND actif = TRUE`,
 
@@ -627,9 +658,13 @@ class MysqlAdminRepo implements AdminRepo {
 
       nom: str(r.nom),
 
+      prenom: str(r.prenom),
+
       email: str(r.email),
 
-      role: "responsable",
+      role: mapAdminRole(r.role),
+
+      active: Boolean(r.active),
 
       passwordHash: str(r.password_hash),
     }
@@ -639,7 +674,8 @@ class MysqlAdminRepo implements AdminRepo {
     const rows = await query<Row>(
       this.pool,
 
-      `SELECT id_administrateur AS id, CONCAT_WS(' ', prenom, nom) AS nom, email
+      `SELECT id_administrateur AS id, nom, prenom, email,
+              role, actif AS active
          FROM administrateur
         WHERE id_administrateur = ? AND actif = TRUE`,
 
@@ -653,9 +689,78 @@ class MysqlAdminRepo implements AdminRepo {
     return {
       id: num(r.id),
       nom: str(r.nom),
+      prenom: str(r.prenom),
       email: str(r.email),
-      role: "responsable",
+      role: mapAdminRole(r.role),
+      active: Boolean(r.active),
     }
+  }
+
+  async findRecordById(id: number): Promise<AdminRecord | null> {
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT id_administrateur AS id, nom, prenom, email,
+              role, actif AS active,
+              mot_de_passe_hash AS password_hash
+         FROM administrateur
+        WHERE id_administrateur = ? AND actif = TRUE`,
+      [id],
+    )
+
+    const r = rows[0]
+    if (!r) return null
+
+    return {
+      id: num(r.id),
+      nom: str(r.nom),
+      prenom: str(r.prenom),
+      email: str(r.email),
+      role: mapAdminRole(r.role),
+      active: Boolean(r.active),
+      passwordHash: str(r.password_hash),
+    }
+  }
+
+  async updateProfile(
+    id: number,
+    input: AdminProfileInput,
+  ): Promise<Admin | null> {
+    await this.pool.query(
+      `UPDATE administrateur
+          SET nom = ?, prenom = ?, email = ?,
+              mot_de_passe_hash = COALESCE(?, mot_de_passe_hash)
+        WHERE id_administrateur = ? AND actif = TRUE`,
+      [
+        input.nom,
+        input.prenom,
+        input.email,
+        input.passwordHash ?? null,
+        id,
+      ],
+    )
+
+    return this.findById(id)
+  }
+
+  async create(input: AdminCreateInput): Promise<Admin> {
+    const login = input.email.split("@", 1)[0].slice(0, 60)
+    const [result] = await this.pool.query<mysql.ResultSetHeader>(
+      `INSERT INTO administrateur
+         (nom, prenom, email, login, mot_de_passe_hash, actif, role)
+       VALUES (?, ?, ?, ?, ?, TRUE, ?)`,
+      [
+        input.nom,
+        input.prenom,
+        input.email,
+        login,
+        input.passwordHash,
+        input.role,
+      ],
+    )
+
+    const admin = await this.findById(result.insertId)
+    if (!admin) throw new Error("Le compte administrateur créé est introuvable")
+    return admin
   }
 }
 
@@ -2790,7 +2895,12 @@ class MysqlLocationRepo implements LocationRepo {
     const statutEffectif =
       statut === "EN_COURS" && dateFin < nowVal ? "EN_RETARD" : statut
 
-    const dateRetour = statut === "TERMINEE" ? nowVal : null
+    const dateRetour =
+      statut === "TERMINEE"
+        ? dateDebut > nowVal
+          ? dateDebut
+          : nowVal
+        : null
 
     const connection = await this.pool.getConnection()
 
@@ -2833,7 +2943,7 @@ class MysqlLocationRepo implements LocationRepo {
 
           statutEffectif,
 
-          dateRetour,
+          statutEffectif === "TERMINEE" ? null : dateRetour,
 
           input.observation?.trim() || null,
 
@@ -2863,6 +2973,13 @@ class MysqlLocationRepo implements LocationRepo {
 
       if (id === 0) throw new Error("Location non créée")
 
+      if (statutEffectif === "TERMINEE") {
+        await connection.query(
+          "UPDATE location SET date_retour_reelle = ? WHERE id_location = ?",
+          [dateRetour, id],
+        )
+      }
+
       await connection.commit()
     } catch (error) {
       await connection.rollback().catch(() => undefined)
@@ -2888,6 +3005,8 @@ class MysqlLocationRepo implements LocationRepo {
     if (!current) return null
 
     const next = { ...current, ...input }
+    const dateFinToSave = input.prolongation ? current.dateFin : next.dateFin
+    const montantToSave = input.prolongation ? current.montant : next.montant
 
     const connection = await this.pool.getConnection()
 
@@ -2915,9 +3034,9 @@ class MysqlLocationRepo implements LocationRepo {
 
           sqlDateTime(next.dateDebut),
 
-          sqlDateTime(next.dateFin),
+          sqlDateTime(dateFinToSave),
 
-          next.montant,
+          montantToSave,
 
           next.observation?.trim() || null,
 
@@ -2962,27 +3081,36 @@ class MysqlLocationRepo implements LocationRepo {
       if (input.prolongation) {
         const p = input.prolongation
 
-        await connection.query(
-          `INSERT INTO prolongation_location
-            (id_location, ancienne_date_fin, nouvelle_date_fin, date_demande, motif, montant_supplementaire, id_commercial)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        try {
+          await connection.query(
+            `INSERT INTO prolongation_location
+              (id_location, ancienne_date_fin, nouvelle_date_fin, date_demande, motif, montant_supplementaire, id_commercial)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
 
-          [
-            id,
-            sqlDateTime(p.ancienneDateFin ?? current.dateFin),
-            sqlDateTime(p.nouvelleDateFin),
-            sqlDateTime(p.dateDemande),
-            p.motif ?? null,
-            p.montantSupplementaire,
-            p.commercialId ?? next.commercialId,
-          ],
-        )
+            [
+              id,
+              sqlDateTime(p.ancienneDateFin ?? current.dateFin),
+              sqlDateTime(p.nouvelleDateFin),
+              sqlDateTime(p.dateDemande),
+              p.motif ?? null,
+              p.montantSupplementaire,
+              p.commercialId ?? next.commercialId,
+            ],
+          )
+        } catch (error) {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "ER_SIGNAL_EXCEPTION" &&
+            "sqlMessage" in error &&
+            typeof error.sqlMessage === "string"
+          ) {
+            throw conflict(error.sqlMessage)
+          }
 
-        await connection.query(
-          "UPDATE location SET date_fin_prevue = ?, montant_total = montant_total + ?, statut = 'EN_PROLONGATION' WHERE id_location = ?",
-
-          [sqlDateTime(p.nouvelleDateFin), p.montantSupplementaire, id],
-        )
+          throw error
+        }
       }
 
       const wasCompleted = current.statut === "TERMINEE"

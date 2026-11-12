@@ -1,5 +1,8 @@
 export class CsvParseError extends Error {}
 
+const EXCEL_DATE_VALUE =
+  /^(?:\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}-\d{2}-\d{2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/
+
 export function parseCsvDocument(csv: string): string[][] {
   const rows: string[][] = []
 
@@ -78,7 +81,13 @@ export function parseCsvDocument(csv: string): string[][] {
     rows.push(row)
   }
 
-  return rows
+  return rows.map((row) =>
+    row.map((value) => {
+      const formulaDate = /^="(.*)"$/.exec(value)?.[1]
+      const candidate = value.startsWith("'") ? value.slice(1) : formulaDate ?? value
+      return EXCEL_DATE_VALUE.test(candidate.trim()) ? candidate : value
+    }),
+  )
 }
 
 export function normalizeCsvLookup(value: string): string {

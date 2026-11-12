@@ -12,8 +12,11 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [showPassword, setShowPassword] = useState(false)
-  const [email, setEmail] = useState("responsable@hertz.bj")
-  const [password, setPassword] = useState("hertz2025")
+  const [email, setEmail] = useState("")
+  // Some browsers ignore autocomplete="off" on login forms.
+  const [emailEditable, setEmailEditable] = useState(false)
+  const [password, setPassword] = useState("")
+  const [passwordEditable, setPasswordEditable] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
@@ -59,7 +62,7 @@ export default function LoginPage() {
         <Link to={ROUTES.home} className="back-home" style={{ textDecoration: "none" }}>
           ← Retour à l’accueil
         </Link>
-        <form onSubmit={submit}>
+        <form onSubmit={submit} autoComplete="off">
           <p className="kicker">ACCÈS RESPONSABLE</p>
           <h2>Connexion</h2>
           <p>Renseignez vos identifiants pour accéder à votre espace.</p>
@@ -70,7 +73,17 @@ export default function LoginPage() {
             <span>Adresse e-mail</span>
             <input
               type="email"
+              name="login-email"
+              autoComplete="off"
               value={email}
+              readOnly={!emailEditable}
+              onFocus={(event) => {
+                if (!emailEditable) {
+                  event.currentTarget.value = ""
+                  setEmail("")
+                  setEmailEditable(true)
+                }
+              }}
               onChange={(e) => setEmail(e.target.value)}
               required
             />
@@ -80,7 +93,17 @@ export default function LoginPage() {
             <div>
               <input
                 type={showPassword ? "text" : "password"}
+                name="login-password"
+                autoComplete="new-password"
                 value={password}
+                readOnly={!passwordEditable}
+                onFocus={(event) => {
+                  if (!passwordEditable) {
+                    event.currentTarget.value = ""
+                    setPassword("")
+                    setPasswordEditable(true)
+                  }
+                }}
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />

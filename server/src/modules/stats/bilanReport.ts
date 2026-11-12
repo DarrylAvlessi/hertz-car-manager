@@ -322,7 +322,7 @@ function buildRange(
     const rentedDays = month.rentedDays
     const immobDays = month.immobilizedDays
     month.utilization = month.fleetDays ? round(rentedDays / month.fleetDays * 100) : 0
-    month.immobilization = month.fleetDays ? round(immobDays / month.fleetDays * 100) : 0
+    month.immobilization = month.fleetDays ? round(immobDays / month.fleetDays * 100, 3) : 0
     const averageVehicles = month.fleetDays / daysObserved
     month.rotation = averageVehicles ? round(month.locations / averageVehicles, 2) : 0
     month.duration = month.locations ? round(month.durationDays / month.locations, 1) : 0
@@ -341,7 +341,7 @@ function buildRange(
   const observedDays = Math.max(1, Math.floor((utcDay(fin) - utcDay(debut)) / DAY_MS) + 1)
   const avgVehicles = fleetDays / observedDays
   const utilization = fleetDays ? round(rentedDays / fleetDays * 100) : 0
-  const immobilization = fleetDays ? round(immobilizedDays / fleetDays * 100) : 0
+  const immobilization = fleetDays ? round(immobilizedDays / fleetDays * 100, 3) : 0
   const rotation = avgVehicles ? round(locationsCount / avgVehicles, 2) : 0
   const duration = locationsCount ? round(rentedDays / locationsCount, 1) : 0
 
@@ -532,7 +532,7 @@ export async function buildBilanReport(
     fr(summary.rentedDays),
     `${fr(summary.utilization, 1)} %`,
     `${fr(summary.rotation, 2)} loc./véh.`,
-    `${fr(summary.immobilization, 1)} %`,
+    `${fr(summary.immobilization, 3)} %`,
   ]
   const kpis = labels.map((label, index) => ({
     label,
@@ -608,14 +608,14 @@ export async function buildBilanReport(
     fr(month.rotation, 2),
     fr(month.duration, 1),
     `${fr(month.utilization, 1)} %`,
-    `${fr(month.immobilization, 1)} %`,
+    `${fr(month.immobilization, 3)} %`,
   ] as [string, string, number, string, string, string, string])
   const concentration = totalRevenue ? round(top10Revenue / totalRevenue * 100) : 0
   const quickRead: Array<[string, string]> = [
     ["Chiffre d'affaires : ", `${fr(summary.ca)} F CFA sur la période${previous.ca ? `, soit ${variation(summary.ca, previous.ca, "%").split("  ")[0]} par rapport à la période précédente` : ""}${bestMonth && bestMonth.revenue > 0 ? `. Meilleur mois : ${bestMonth.fullLabel} (${fr(bestMonth.revenue / 1_000_000, 1)} M F CFA)` : ""}.`],
     ["Utilisation : ", `${fr(summary.utilization, 1)} % des jours disponibles du parc ont été loués${peak && trough ? `. Pic en ${peak.fullLabel} (${fr(peak.utilization)} %), creux en ${trough.fullLabel} (${fr(trough.utilization)} %)` : ""}.`],
     ["Rotation : ", `${fr(summary.rotation, 2)} locations par véhicule, pour une durée moyenne de ${fr(summary.duration, 1)} jours par location.`],
-    ["Immobilisation : ", `${fr(summary.immobilization, 1)} % des jours-véhicules sont perdus (${fr(summary.immobilizedDays)} jours).`],
+    ["Immobilisation : ", `${fr(summary.immobilization, 3)} % des jours-véhicules sont perdus (${fr(summary.immobilizedDays)} jours).`],
     ["Concentration : ", `les 10 véhicules les plus rentables réalisent ${fr(concentration)} % du chiffre d'affaires.`],
   ]
   if (!summary.locations) quickRead.unshift(["Aucune location enregistrée sur la période : ", "les indicateurs de location sont à zéro."])
@@ -637,7 +637,7 @@ export async function buildBilanReport(
     fr(summary.rotation, 2),
     fr(summary.duration, 1),
     `${fr(summary.utilization, 1)} %`,
-    `${fr(summary.immobilization, 1)} %`,
+    `${fr(summary.immobilization, 3)} %`,
   ]
   const monthCount = keys.length
   const warning = monthCount > 12
@@ -692,7 +692,7 @@ export async function buildBilanReport(
     objectif_utilisation: null,
     jours_vehicules_split: {
       Loués: months.map((month) => month.fleetDays ? round(month.rentedDays / month.fleetDays * 100) : 0),
-      Immobilisés: months.map((month) => month.fleetDays ? round(month.immobilizedDays / month.fleetDays * 100) : 0),
+      Immobilisés: months.map((month) => month.fleetDays ? round(month.immobilizedDays / month.fleetDays * 100, 3) : 0),
       Disponibles: months.map((month) => month.fleetDays ? round(Math.max(0, month.fleetDays - month.rentedDays - month.immobilizedDays) / month.fleetDays * 100) : 0),
     },
     utilisation_categories: current.activeByCategory.length

@@ -162,6 +162,16 @@ export default function ClientCommercialModal({
 
   const [error, setError] = useState<string | null>(null)
 
+  const [printPeriodOpen, setPrintPeriodOpen] = useState(false)
+
+  const [printStartDate, setPrintStartDate] = useState("")
+
+  const [printEndDate, setPrintEndDate] = useState("")
+
+  const [printPeriodError, setPrintPeriodError] = useState<string | null>(null)
+
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+
   useEffect(() => {
     let active = true
 
@@ -235,6 +245,18 @@ export default function ClientCommercialModal({
     }
   }, [id, module])
 
+  useEffect(() => {
+    if (!printPeriodOpen && !pdfPreviewUrl) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPrintPeriodOpen(false)
+        setPdfPreviewUrl(null)
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape)
+    return () => window.removeEventListener("keydown", closeOnEscape)
+  }, [pdfPreviewUrl, printPeriodOpen])
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
 
@@ -298,6 +320,30 @@ export default function ClientCommercialModal({
 
   const closeIfIdle = () => {
     if (!saving) close()
+  }
+
+  const previewCommercialFiche = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setPrintPeriodError(null)
+    if (Boolean(printStartDate) !== Boolean(printEndDate)) {
+      setPrintPeriodError("Renseignez les deux dates, ou laissez les deux champs vides.")
+      return
+    }
+    if (printStartDate && printEndDate && printStartDate > printEndDate) {
+      setPrintPeriodError("La date de début doit précéder la date de fin.")
+      return
+    }
+
+    const params = new URLSearchParams()
+    if (printStartDate && printEndDate) {
+      params.set("debut", printStartDate)
+      params.set("fin", printEndDate)
+    }
+    const query = params.toString()
+    setPdfPreviewUrl(
+      exportUrl(`/api/export/commerciaux/${id}/fiche${query ? `?${query}` : ""}`),
+    )
+    setPrintPeriodOpen(false)
   }
 
   const title =
@@ -670,16 +716,10 @@ export default function ClientCommercialModal({
                 type="button"
                 className="primary small"
                 onClick={() =>
-                  window.open(
-                    exportUrl(`/api/export/clients/${id}/fiche`),
-
-                    "_blank",
-
-                    "noopener",
-                  )
+                  setPdfPreviewUrl(exportUrl(`/api/export/clients/${id}/fiche`))
                 }
               >
-                Imprimer la fiche PDF
+                Visualiser la fiche PDF
               </button>
             </footer>
           </div>
@@ -734,19 +774,134 @@ export default function ClientCommercialModal({
               <button
                 type="button"
                 className="primary small"
-                onClick={() =>
-                  window.open(
-                    exportUrl(`/api/export/commerciaux/${id}/fiche`),
-                    "_blank",
-                    "noopener",
-                  )
-                }
+                onClick={() => {
+                  setPrintStartDate("")
+                  setPrintEndDate("")
+                  setPrintPeriodError(null)
+                  setPrintPeriodOpen(true)
+                }}
               >
-                Imprimer la fiche PDF
+                Visualiser la fiche PDF
               </button>
             </footer>
           </div>
         ) : null}
+        {printPeriodOpen && module === "Commerciaux" && (
+          <div
+            className="modal-backdrop commercial-print-period-backdrop"
+            onClick={() => setPrintPeriodOpen(false)}
+          >
+            <form
+              className="modal commercial-print-period"
+              onClick={(event) => event.stopPropagation()}
+              onSubmit={previewCommercialFiche}
+            >
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setPrintPeriodOpen(false)}
+                aria-label="Fermer"
+              >
+                ×
+              </button>
+              <p className="kicker">FICHE DE PERFORMANCE</p>
+              <h2>Choisir la période</h2>
+              <p className="commercial-print-period-hint">
+                Laissez les dates vides pour inclure toutes les opérations.
+              </p>
+              <div className="modal-fields">
+                <label>
+                  <span>Date de début</span>
+                  <input
+                    type="date"
+                    value={printStartDate}
+                    onChange={(event) => setPrintStartDate(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Date de fin</span>
+                  <input
+                    type="date"
+                    value={printEndDate}
+                    onChange={(event) => setPrintEndDate(event.target.value)}
+                  />
+                </label>
+              </div>
+              {printPeriodError && (
+                <p className="form-error" role="alert">{printPeriodError}</p>
+              )}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setPrintPeriodOpen(false)}
+                >
+                  Annuler
+                </button>
+                <button type="submit" className="primary small">
+                  Générer et visualiser la fiche PDF
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+        {pdfPreviewUrl && (
+          <div
+            className="stats-pdf-backdrop"
+            onClick={() => setPdfPreviewUrl(null)}
+          >
+            <section
+              className="stats-pdf-viewer"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Visualisation de la fiche PDF ${module === "Clients" ? "client" : "commercial"}`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="stats-pdf-toolbar">
+                <div>
+                  <p className="stats-eyebrow">HERTZ BÉNIN</p>
+                  <h2>
+                    {module === "Clients"
+                      ? `Fiche client · ${client?.nom ?? ""}`
+                      : `Fiche commerciale · ${commercial?.nom ?? ""}`}
+                  </h2>
+                </div>
+                <div className="stats-pdf-actions">
+                  <a
+                    className="secondary"
+                    href={`${pdfPreviewUrl}&download=true`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Télécharger
+                  </a>
+                  <a
+                    className="secondary"
+                    href={pdfPreviewUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Ouvrir dans un nouvel onglet
+                  </a>
+                  <button
+                    className="secondary stats-pdf-close"
+                    type="button"
+                    onClick={() => setPdfPreviewUrl(null)}
+                    aria-label="Fermer le visualiseur PDF"
+                    title="Fermer"
+                  >
+                    ×
+                  </button>
+                </div>
+              </header>
+              <iframe
+                className="stats-pdf-frame"
+                src={pdfPreviewUrl}
+                title={`Fiche PDF ${module === "Clients" ? "client" : "commercial"}`}
+              />
+            </section>
+          </div>
+        )}
       </section>
     </div>,
 
