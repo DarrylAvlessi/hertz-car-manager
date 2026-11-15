@@ -17,6 +17,7 @@ import { badRequest, conflict, notFound } from "../../lib/httpErrors.js"
 import {
   normalizeCsvHeader,
   normalizeCsvLookup,
+  normalizeCsvName,
   parseCsvDocument,
 } from "../../lib/csv.js"
 
@@ -568,6 +569,18 @@ export function contraventionsRouter(
       const normalizeRegistration = (text: string) =>
         normalize(text).replace(/[\s-]/g, "")
 
+      const clientsByName = new Map<string, number>()
+      for (const client of clients) {
+        const names = [client.nom]
+        if (client.prenom) names.push(`${client.prenom} ${client.nom}`)
+        if (client.prenom && client.nomFamille) {
+          names.push(`${client.prenom} ${client.nomFamille}`)
+        }
+        for (const name of names) {
+          clientsByName.set(normalizeCsvName(name), client.id)
+        }
+      }
+
       const knownNumbers = new Set(
         existing.map((item) => normalize(item.numeroContravention)),
       )
@@ -624,9 +637,7 @@ export function contraventionsRouter(
 
         const commercialName = value(row, "AGENTDEVENT")
 
-        const client = clients.find(
-          (item) => normalize(item.nom) === normalize(clientName),
-        )
+        const clientId = clientsByName.get(normalizeCsvName(clientName))
 
         const commercial = commercials.find(
           (item) => normalize(item.nom) === normalize(commercialName),
@@ -645,6 +656,10 @@ export function contraventionsRouter(
         if (amount === null) rowErrors.push("montant invalide")
 
         if (!vehicle) rowErrors.push(`véhicule introuvable (${registration})`)
+
+        if (clientName.length > 150) {
+          rowErrors.push("nom du client limité à 150 caractères")
+        }
 
         if (!paidStatus) {
           rowErrors.push(
@@ -702,9 +717,9 @@ export function contraventionsRouter(
           montantRecouvre: recovery === "EFFECTUE" ? amount! : 0,
           vehiculeId: vehicle!.id,
 
-          clientId: client?.id ?? null,
+          clientId: clientId ?? null,
 
-          clientImport: client ? null : clientName || null,
+          clientImport: clientId === undefined ? clientName || null : null,
 
           commercialId: commercial?.id ?? null,
 
@@ -724,9 +739,45 @@ export function contraventionsRouter(
         )
       }
 
+      const missingClients = new Map<string, string>()
+      for (const input of inputs) {
+        if (input.clientId == null && input.clientImport) {
+          const key = normalizeCsvName(input.clientImport)
+          if (!missingClients.has(key)) {
+            missingClients.set(key, input.clientImport)
+          }
+        }
+      }
+
+      const createdClientIds = new Map<string, number>()
+      for (const [key, name] of missingClients) {
+        const client = await repos.clients.create(
+          {
+            nom: name,
+            type: "Particulier",
+            telephone: "",
+          },
+          req.user!.id,
+        )
+        createdClientIds.set(key, client.id)
+      }
+      const contraventionInputs = inputs.map((input) => {
+        if (input.clientId != null || !input.clientImport) return input
+        const clientId = createdClientIds.get(
+          normalizeCsvName(input.clientImport),
+        )
+        if (clientId === undefined) {
+          throw new Error(
+            `Client « ${input.clientImport} » introuvable après création`,
+          )
+        }
+        return { ...input, clientId, clientImport: null }
+      })
+
       try {
         res.status(201).json({
-          created: await repos.contraventions.importMany(inputs),
+          created: await repos.contraventions.importMany(contraventionInputs),
+          clientsCreated: missingClients.size,
         })
       } catch (error) {
         if (hasDatabaseCode(error, "ER_DUP_ENTRY")) {

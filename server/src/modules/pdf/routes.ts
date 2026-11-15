@@ -222,12 +222,25 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
     const debut = typeof req.query.debut === "string" ? req.query.debut : undefined
     const fin = typeof req.query.fin === "string" ? req.query.fin : undefined
     const segment = typeof req.query.segment === "string" ? req.query.segment : "LCD"
+    if (req.query.agenceId !== undefined && typeof req.query.agenceId !== "string") {
+      throw badRequest("L'identifiant de l'agence doit être unique.")
+    }
+    const agenceId =
+      typeof req.query.agenceId === "string"
+        ? Number(req.query.agenceId)
+        : undefined
+    if (
+      agenceId !== undefined &&
+      (!Number.isSafeInteger(agenceId) || agenceId <= 0)
+    ) {
+      throw badRequest("Identifiant d'agence invalide.")
+    }
     const isDemo = req.query.demo === "true" || req.query.demo === "1"
     const isDownload = req.query.download === "true" || req.query.download === "1"
 
     const reportData = isDemo
       ? undefined
-      : await buildBilanReport(repos, { debut, fin, segment })
+      : await buildBilanReport(repos, { debut, fin, segment, agenceId })
     const pdfBuffer = await generateBilanPdf(
       { debut, fin, segment, demo: isDemo },
       reportData,

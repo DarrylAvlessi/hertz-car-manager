@@ -11,7 +11,12 @@ import { apiFetch } from "@/shared/api/client"
 
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
-import { downloadCsv, parseCsv } from "@/shared/data/csv"
+import {
+  downloadCsv,
+  downloadXlsx,
+  parseCsv,
+  readCsvFile,
+} from "@/shared/data/csv"
 
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 import type { DashboardOutletContext } from "../DashboardLayout"
@@ -121,7 +126,7 @@ export default function AgenciesPage() {
     setImporting(true)
     setError(null)
     try {
-      const rows = parseCsv(await file.text()).slice(1)
+      const rows = parseCsv(await readCsvFile(file)).slice(1)
       for (const [index, values] of rows.entries()) {
         if (values.length < 5) throw new Error(`Ligne ${index + 2} incomplète.`)
         await apiFetch("/api/parc/agences", {
@@ -149,17 +154,47 @@ export default function AgenciesPage() {
     }
   }
 
-  const exportCsv = () => {
-    downloadCsv("export-agences.csv", [
-      ["Code", "Nom", "Adresse", "Téléphone", "Statut"],
-      ...rows.map((row) => [
-        row.code,
-        row.nom,
-        row.adresse ?? "",
-        row.telephone ?? "",
-        row.actif ? "Active" : "Inactive",
-      ]),
-    ])
+  const agencyHeaders = ["Code", "Nom", "Adresse", "Téléphone", "Statut"]
+  const agencyRows = [
+    agencyHeaders,
+    ...rows.map((row) => [
+      row.code,
+      row.nom,
+      row.adresse ?? "",
+      row.telephone ?? "",
+      row.actif ? "Active" : "Inactive",
+    ]),
+  ]
+  const agencyTemplateRows = [
+    agencyHeaders,
+    ["APS", "Agence principale", "Cotonou", "+229 21 30 00 00", "Active"],
+    [
+      "ABC",
+      "Agence aéroport",
+      "Aéroport de Cotonou",
+      "+229 21 30 11 22",
+      "Inactive",
+    ],
+  ]
+  const agencyDropdowns = { Statut: ["Active", "Inactive"] }
+  const exportCsv = () => downloadCsv("export-agences.csv", agencyRows)
+  const exportXlsx = () => {
+    void downloadXlsx("export-agences.xlsx", agencyRows, {
+      dropdowns: agencyDropdowns,
+    }).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Export Excel impossible",
+      ),
+    )
+  }
+  const downloadTemplateXlsx = () => {
+    void downloadXlsx("modele-import-agences.xlsx", agencyTemplateRows, {
+      dropdowns: agencyDropdowns,
+    }).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Modèle Excel impossible",
+      ),
+    )
   }
 
   useEffect(() => {
@@ -169,23 +204,7 @@ export default function AgenciesPage() {
           className="secondary"
           type="button"
           onClick={() =>
-            downloadCsv("modele-import-agences.csv", [
-              ["Code", "Nom", "Adresse", "Téléphone", "Statut"],
-              [
-                "APS",
-                "Agence principale",
-                "Cotonou",
-                "+229 21 30 00 00",
-                "Active",
-              ],
-              [
-                "ABC",
-                "Agence aéroport",
-                "Aéroport de Cotonou",
-                "+229 21 30 11 22",
-                "Inactive",
-              ],
-            ])
+            downloadCsv("modele-import-agences.csv", agencyTemplateRows)
           }
         >
           Modèle CSV
@@ -193,13 +212,23 @@ export default function AgenciesPage() {
         <button
           className="secondary"
           type="button"
+          onClick={downloadTemplateXlsx}
+        >
+          Modèle Excel
+        </button>
+        <button
+          className="secondary"
+          type="button"
           onClick={() => csvInput.current?.click()}
           disabled={importing}
         >
-          {importing ? "Import…" : "Importer CSV"}
+          {importing ? "Import…" : "Importer CSV/Excel"}
         </button>
         <button className="primary small" type="button" onClick={exportCsv}>
           Exporter CSV
+        </button>
+        <button className="primary small" type="button" onClick={exportXlsx}>
+          Exporter Excel
         </button>
       </div>,
     )
@@ -217,8 +246,8 @@ export default function AgenciesPage() {
           <input
             ref={csvInput}
             type="file"
-            accept=".csv,text/csv"
-            aria-label="Sélectionner un fichier CSV d'agences"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            aria-label="Sélectionner un fichier CSV ou Excel d'agences"
             hidden
             onChange={(event) => void importCsv(event)}
           />

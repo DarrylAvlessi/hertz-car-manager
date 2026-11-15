@@ -24,10 +24,15 @@ type ModalMode = "details" | "edit"
 
 type ClientType = "Particulier" | "Entreprise" | "Organisation"
 
+interface AgencyOption {
+  id: number
+  nom: string
+  code: string
+  actif: boolean
+}
+
 interface ClientDraft {
   nom: string
-
-  prenom: string
 
   type: ClientType
 
@@ -41,9 +46,9 @@ interface ClientDraft {
 }
 
 interface CommercialDraft {
-  nom: string
+  nomEtPrenoms: string
 
-  prenom: string
+  agenceId: string
 
   abreviation: string
 
@@ -128,10 +133,10 @@ export default function ClientCommercialModal({
 
   const [commercial, setCommercial] = useState<CommercialFicheDto | null>(null)
 
+  const [agencies, setAgencies] = useState<AgencyOption[]>([])
+
   const [clientDraft, setClientDraft] = useState<ClientDraft>({
     nom: "",
-
-    prenom: "",
 
     type: "Particulier",
 
@@ -145,9 +150,9 @@ export default function ClientCommercialModal({
   })
 
   const [commercialDraft, setCommercialDraft] = useState<CommercialDraft>({
-    nom: "",
+    nomEtPrenoms: "",
 
-    prenom: "",
+    agenceId: "",
 
     abreviation: "",
 
@@ -188,9 +193,7 @@ export default function ClientCommercialModal({
         setClient(clientRecord)
 
         setClientDraft({
-          nom: clientRecord.nomFamille ?? clientRecord.nom,
-
-          prenom: clientRecord.prenom ?? "",
+          nom: clientRecord.nom,
 
           type: clientType(clientRecord.type),
 
@@ -206,16 +209,28 @@ export default function ClientCommercialModal({
         return
       }
 
-      const commercialRecord = await fetchCommercialFiche(id)
+      const [commercialRecord, agencyRows] = await Promise.all([
+        fetchCommercialFiche(id),
+        apiFetch<AgencyOption[]>("/api/parc/agences"),
+      ])
 
       if (!active) return
 
       setCommercial(commercialRecord)
+      setAgencies(agencyRows)
 
       setCommercialDraft({
-        nom: commercialRecord.nomFamille ?? commercialRecord.nom,
+        nomEtPrenoms: [
+          commercialRecord.nomFamille || commercialRecord.nom,
+          commercialRecord.prenom,
+        ]
+          .filter(Boolean)
+          .join(" "),
 
-        prenom: commercialRecord.prenom ?? "",
+        agenceId:
+          commercialRecord.agenceId == null
+            ? ""
+            : String(commercialRecord.agenceId),
 
         abreviation: commercialRecord.abreviation ?? "",
 
@@ -274,8 +289,6 @@ export default function ClientCommercialModal({
 
             nom: clientDraft.nom.trim(),
 
-            prenom: clientDraft.prenom.trim(),
-
             telephone: clientDraft.telephone.trim(),
 
             email: clientDraft.email.trim(),
@@ -290,11 +303,11 @@ export default function ClientCommercialModal({
           method: "PUT",
 
           body: {
-            ...commercialDraft,
+            nom: commercialDraft.nomEtPrenoms.trim(),
 
-            nom: commercialDraft.nom.trim(),
-
-            prenom: commercialDraft.prenom.trim(),
+            agenceId: commercialDraft.agenceId
+              ? Number(commercialDraft.agenceId)
+              : null,
 
             abreviation: commercialDraft.abreviation.trim(),
 
@@ -394,41 +407,24 @@ export default function ClientCommercialModal({
             <div className="modal-fields">
               {module === "Clients" ? (
                 <>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-1 block text-sm font-medium text-slate-700">
-                        Nom de famille
-                      </span>
-                      <input
-                        className={fieldClass}
-                        value={clientDraft.nom}
-                        onChange={(event) =>
-                          setClientDraft((current) => ({
-                            ...current,
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-slate-700">
+                      Nom et prénoms
+                    </span>
+                    <input
+                      className={fieldClass}
+                      value={clientDraft.nom}
+                      onChange={(event) =>
+                        setClientDraft((current) => ({
+                          ...current,
 
-                            nom: event.target.value,
-                          }))
-                        }
-                        required
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-sm font-medium text-slate-700">
-                        Prénom
-                      </span>
-                      <input
-                        className={fieldClass}
-                        value={clientDraft.prenom}
-                        onChange={(event) =>
-                          setClientDraft((current) => ({
-                            ...current,
-
-                            prenom: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                  </div>
+                          nom: event.target.value,
+                        }))
+                      }
+                      maxLength={150}
+                      required
+                    />
+                  </label>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="block">
                       <span className="mb-1 block text-sm font-medium text-slate-700">
@@ -464,7 +460,6 @@ export default function ClientCommercialModal({
                             telephone: event.target.value,
                           }))
                         }
-                        required
                       />
                     </label>
                   </div>
@@ -520,39 +515,67 @@ export default function ClientCommercialModal({
                 </>
               ) : (
                 <>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-slate-700">
+                      Nom et prénoms
+                    </span>
+                    <input
+                      className={fieldClass}
+                      value={commercialDraft.nomEtPrenoms}
+                      onChange={(event) =>
+                        setCommercialDraft((current) => ({
+                          ...current,
+                          nomEtPrenoms: event.target.value,
+                        }))
+                      }
+                      maxLength={80}
+                      required
+                    />
+                  </label>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="block">
                       <span className="mb-1 block text-sm font-medium text-slate-700">
-                        Nom
+                        Agence
                       </span>
-                      <input
+                      <select
                         className={fieldClass}
-                        value={commercialDraft.nom}
+                        value={commercialDraft.agenceId}
                         onChange={(event) =>
                           setCommercialDraft((current) => ({
                             ...current,
-
-                            nom: event.target.value,
+                            agenceId: event.target.value,
                           }))
                         }
-                        required
-                      />
+                      >
+                        <option value="">Aucune agence</option>
+                        {agencies.map((agency) => (
+                          <option key={agency.id} value={agency.id}>
+                            {agency.nom}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-sm font-medium text-slate-700">
-                        Prénom
+                        Code agence
                       </span>
-                      <input
+                      <select
                         className={fieldClass}
-                        value={commercialDraft.prenom}
+                        value={commercialDraft.agenceId}
                         onChange={(event) =>
                           setCommercialDraft((current) => ({
                             ...current,
-
-                            prenom: event.target.value,
+                            agenceId: event.target.value,
                           }))
                         }
-                      />
+                      >
+                        <option value="">Aucun code</option>
+                        {agencies.map((agency) => (
+                          <option key={agency.id} value={agency.id}>
+                            {agency.code}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -733,6 +756,14 @@ export default function ClientCommercialModal({
               <div>
                 <dt>Abréviation</dt>
                 <dd>{commercial.abreviation || "—"}</dd>
+              </div>
+              <div>
+                <dt>Agence d’appartenance</dt>
+                <dd>
+                  {commercial.agence
+                    ? `${commercial.agence}${commercial.codeAgence ? ` (${commercial.codeAgence})` : ""}`
+                    : "—"}
+                </dd>
               </div>
             </dl>
             <div className="client-commercial-metrics">

@@ -36,6 +36,17 @@ authentification JWT et données servies par API (driver mémoire ou MySQL).
 
 ### Démarrage automatique sous Windows / Laragon
 
+Avant l'installation, vérifiez que Node.js 22 ou une version ultérieure est
+installée, que `server/.env` est configuré pour MySQL (notamment `DB_PORT`,
+généralement `3306`) et que la base de données de l'application est disponible.
+Laragon doit démarrer MySQL automatiquement. Installez les dépendances une fois,
+depuis la racine du projet :
+
+```powershell
+npm install
+npm install --prefix server
+```
+
 Pour démarrer l'application à chaque ouverture de votre session Windows, ouvrez
 PowerShell une seule fois dans le dossier du projet et exécutez :
 
@@ -45,11 +56,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
 
 Cette installation enregistre une tâche Windows et démarre les services tout de
 suite. À chaque ouverture de session par la suite, Laragon démarre MySQL, puis le
-frontend sur `http://localhost:8443` et l'API sur le port `3101`. Vous n'aurez
-plus à lancer les commandes npm. Les journaux de démarrage sont conservés dans
-`logs/`. Si MySQL n'est pas encore prêt ou si un service ne démarre pas, Windows
-réessaie automatiquement toutes les minutes (jusqu'à 60 fois). Il faut ouvrir
-une session Windows pour que la tâche s'exécute.
+frontend sur `http://localhost:8443` et l'API sur le port `3101`. Un superviseur
+reste actif en arrière-plan, relance les services s'ils s'arrêtent et attend que
+MySQL soit disponible avant de lancer l'API, en utilisant le port défini dans
+`server/.env`. Vous n'aurez plus à lancer les commandes npm. Les journaux de
+démarrage sont conservés dans `logs/`. Il faut ouvrir une session Windows et
+laisser Laragon démarrer MySQL pour que l'application soit accessible. Installez
+le démarrage automatique après avoir placé le projet dans son dossier définitif.
 
 Pour supprimer le démarrage automatique, exécutez dans PowerShell :
 

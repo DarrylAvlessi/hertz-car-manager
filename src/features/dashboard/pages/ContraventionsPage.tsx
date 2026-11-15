@@ -9,7 +9,7 @@ import { apiFetch } from "@/shared/api/client"
 
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
-import { downloadCsv } from "@/shared/data/csv"
+import { downloadCsv, downloadXlsx, readCsvFile } from "@/shared/data/csv"
 
 import type { DashboardOutletContext } from "../DashboardLayout"
 
@@ -175,51 +175,6 @@ const CSV_HEADERS = [
 
 const CSV_TEMPLATE_HEADERS = CSV_HEADERS.slice(1)
 
-const CSV_TEMPLATE_EXAMPLES: Array<Array<string | number>> = [
-  [
-    "EXEMPLE - À remplacer avant import",
-    "Excès de vitesse",
-    "ANATT-2026-001",
-    "05/11/2026",
-    "25000 XOF",
-    "EXEMPLE - Immatriculation",
-    "TOYOTA",
-    "COROLLA",
-    "EXEMPLE - Client",
-    "EXEMPLE - Agent",
-    "Payée",
-    "12/11/2026",
-    "Carte bancaire",
-    "QUITT-2026-001",
-    "ARCS BENIN",
-    "Effectué",
-    "05/11/2026",
-    "Payée",
-    "Effectué",
-  ],
-  [
-    "EXEMPLE - À remplacer avant import",
-    "Stationnement interdit",
-    "ANATT-2026-002",
-    "12/11/2026",
-    "15000 XOF",
-    "EXEMPLE - Immatriculation",
-    "NISSAN",
-    "KICKS",
-    "EXEMPLE - Client",
-    "EXEMPLE - Agent",
-    "Payée",
-    "12/11/2026",
-    "Virement",
-    "EXEMPLE - Quittance",
-    "Client",
-    "Effectué",
-    "13/11/2026",
-    "Payée",
-    "Effectué",
-  ],
-]
-
 const emptyDraft = (): ContraventionDraft => ({
   numeroContravention: "",
 
@@ -285,6 +240,22 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   MTN_MOMO: "MTN-MoMo",
   MOOV_MONEY: "Moov-Money",
   MOBILE_MONEY: "Mobile money",
+}
+
+const contraventionDropdowns = {
+  Statut: ["Impayée", "Payée"],
+  "Moyent de paiement": [
+    "Espèces",
+    "Carte bancaire",
+    "Chèque",
+    "Virement",
+    "MTN-MoMo",
+    "Moov-Money",
+    "Mobile money",
+  ],
+  Payeur: ["Hertz", "Client", "Agent de vente"],
+  Recouvrement: ["Non effectué", "Effectué", "Non lieu"],
+  Payée: ["Impayée", "Payée"],
 }
 
 function dateForInput(value: string | null | undefined): string {
@@ -356,16 +327,6 @@ function draftFromRow(row: ContraventionDto): ContraventionDraft {
     commercialImport: row.commercialImport ?? "",
 
     observation: row.observation ?? "",
-  }
-}
-
-async function readCsvFile(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer()
-
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer)
-  } catch {
-    return new TextDecoder("windows-1252").decode(buffer)
   }
 }
 
@@ -600,7 +561,7 @@ export default function ContraventionsPage() {
     setError(null)
 
     try {
-      const result = await apiFetch<{ created: number }>(
+      const result = await apiFetch<{ created: number; clientsCreated?: number }>(
         "/api/contraventions/import-csv",
 
         {
@@ -612,9 +573,15 @@ export default function ContraventionsPage() {
 
       await load()
 
-      notifyDashboardMutation(
+      const notices = [
         `Import terminé : ${result.created} contravention(s) ajoutée(s).`,
-      )
+      ]
+      if (result.clientsCreated) {
+        notices.push(
+          `${result.clientsCreated} nouveau(x) client(s) créé(s).`,
+        )
+      }
+      notifyDashboardMutation(notices.join(" "))
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "Import CSV impossible")
     } finally {
@@ -624,7 +591,7 @@ export default function ContraventionsPage() {
     }
   }
 
-  const exportCsv = () => {
+  const exportCsv = (format: "csv" | "xlsx" = "csv") => {
     const total = rows.reduce((sum, item) => sum + item.montant, 0)
 
     const paid = rows
@@ -720,7 +687,7 @@ export default function ContraventionsPage() {
       ]),
     )
 
-    downloadCsv("export-contraventions-anatt.csv", [
+    const exportRows = [
       pad([
         "CONTRENVENTIONS ROUTIERES",
 
@@ -777,7 +744,19 @@ export default function ContraventionsPage() {
       CSV_HEADERS,
 
       ...dataRows,
-    ])
+    ]
+    if (format === "xlsx") {
+      void downloadXlsx("export-contraventions-anatt.xlsx", exportRows, {
+        headerRow: 6,
+        dropdowns: contraventionDropdowns,
+      }).catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Export Excel impossible",
+        ),
+      )
+    } else {
+      downloadCsv("export-contraventions-anatt.csv", exportRows)
+    }
   }
 
   useEffect(() => {
@@ -786,21 +765,40 @@ export default function ContraventionsPage() {
         <button
           type="button"
           className="secondary vehicle-csv-button"
-          title="Le modèle contient deux exemples ignorés automatiquement lors de l'import."
+          title="Le modèle contient les en-têtes attendus pour l'import."
           onClick={() =>
             downloadCsv("modele-contraventions-anatt.csv", [
               CSV_TEMPLATE_HEADERS,
-              ...CSV_TEMPLATE_EXAMPLES,
             ])
           }
         >
           Modèle CSV
         </button>
+        <button
+          type="button"
+          className="secondary vehicle-csv-button"
+          title="Les colonnes à choix proposent leurs valeurs autorisées."
+          onClick={() =>
+            void downloadXlsx(
+              "modele-contraventions-anatt.xlsx",
+              [CSV_TEMPLATE_HEADERS],
+              { dropdowns: contraventionDropdowns },
+            ).catch((cause: unknown) =>
+              setError(
+                cause instanceof Error
+                  ? cause.message
+                  : "Modèle Excel impossible",
+              ),
+            )
+          }
+        >
+          Modèle Excel
+        </button>
         <label className="secondary vehicle-csv-button cursor-pointer">
-          {importing ? "Import…" : "Importer CSV"}
+          {importing ? "Import…" : "Importer CSV/Excel"}
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             hidden
             disabled={importing}
             onChange={(event) => void importCsv(event)}
@@ -809,9 +807,16 @@ export default function ContraventionsPage() {
         <button
           type="button"
           className="primary small vehicle-csv-button"
-          onClick={exportCsv}
+          onClick={() => exportCsv()}
         >
           Exporter CSV
+        </button>
+        <button
+          type="button"
+          className="primary small vehicle-csv-button"
+          onClick={() => exportCsv("xlsx")}
+        >
+          Exporter Excel
         </button>
       </div>,
     )

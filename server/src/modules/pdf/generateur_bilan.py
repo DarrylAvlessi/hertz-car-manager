@@ -922,9 +922,22 @@ class PDFReportDrawer:
             c.setFillColor(COLOR_MUTED)
             c.drawString(x_pos * mm, y_top(89.0), lbl)
 
-            c.setFont("Montserrat-SemiBold", 8.6)
-            c.setFillColor(COLOR_DARK)
-            c.drawString(x_pos * mm, y_top(94.5), val)
+            if lbl == "PÉRIMÈTRE":
+                max_width = (col_x[2] - col_x[1] - 3) * mm
+                p_style = ParagraphStyle(
+                    "PerimetreHeader",
+                    fontName="Montserrat-SemiBold",
+                    fontSize=7.6,
+                    leading=8.5,
+                    textColor=COLOR_DARK,
+                )
+                paragraph = Paragraph(str(val), p_style)
+                paragraph.wrap(max_width, 12 * mm)
+                paragraph.drawOn(c, x_pos * mm, y_top(98.5))
+            else:
+                c.setFont("Montserrat-SemiBold", 8.6)
+                c.setFillColor(COLOR_DARK)
+                c.drawString(x_pos * mm, y_top(94.5), val)
 
         c.setStrokeColor(COLOR_BORDER)
         c.setLineWidth(0.5)

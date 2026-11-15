@@ -17,6 +17,7 @@ $settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
+  -ExecutionTimeLimit ([TimeSpan]::Zero) `
   -RestartCount 60 `
   -RestartInterval (New-TimeSpan -Minutes 1)
 
@@ -30,5 +31,5 @@ Register-ScheduledTask `
   -Force | Out-Null
 
 Write-Output "Automatic startup task registered for $userIdentity."
-Write-Output "Starting the services now..."
-& $launcherPath
+Write-Output "Starting the service supervisor now..."
+Start-ScheduledTask -TaskName $taskName

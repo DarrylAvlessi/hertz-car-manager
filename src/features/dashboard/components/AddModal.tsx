@@ -35,6 +35,13 @@ interface CommercialOption {
   contact: string
 }
 
+interface AgencyOption {
+  id: number
+  nom: string
+  code: string
+  actif: boolean
+}
+
 interface AvailabilityResponse {
   disponible: boolean
 
@@ -84,8 +91,6 @@ export default function AddModal({
 
   const [nom, setNom] = useState("")
 
-  const [prenom, setPrenom] = useState("")
-
   const [telephone, setTelephone] = useState("")
 
   const [email, setEmail] = useState("")
@@ -103,6 +108,10 @@ export default function AddModal({
   const [vehicles, setVehicles] = useState<VehicleOption[]>([])
 
   const [commercials, setCommercials] = useState<CommercialOption[]>([])
+
+  const [agencies, setAgencies] = useState<AgencyOption[]>([])
+
+  const [agencyId, setAgencyId] = useState("")
 
   const [clientId, setClientId] = useState("")
 
@@ -159,6 +168,32 @@ export default function AddModal({
     : isLocation
       ? "Créer une location"
       : `Ajouter un ${isCommercial ? "commercial" : "client"}`
+
+  useEffect(() => {
+    if (!isCommercial) return
+
+    let active = true
+    setOptionsLoading(true)
+    setOptionsError(null)
+    apiFetch<AgencyOption[]>("/api/parc/agences")
+      .then((rows) => {
+        if (active) setAgencies(rows.filter((agency) => agency.actif))
+      })
+      .catch((e: unknown) => {
+        if (active) {
+          setOptionsError(
+            e instanceof Error ? e.message : "Impossible de charger les agences",
+          )
+        }
+      })
+      .finally(() => {
+        if (active) setOptionsLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [isCommercial])
 
   useEffect(() => {
     if (!needsAssociations) return
@@ -279,9 +314,7 @@ export default function AddModal({
           method: "POST",
 
           body: {
-            nom,
-
-            prenom,
+            nom: nom.trim(),
 
             type,
 
@@ -298,7 +331,13 @@ export default function AddModal({
         await apiFetch("/api/commerciaux", {
           method: "POST",
 
-          body: { nom, prenom, abreviation, telephone, email },
+          body: {
+            nom: nom.trim(),
+            abreviation,
+            telephone,
+            email,
+            agenceId: agencyId ? Number(agencyId) : null,
+          },
         })
       } else if (isReservation || isLocation) {
         if (isReservation && Boolean(dateStart) !== Boolean(dateEnd)) {
@@ -408,23 +447,29 @@ export default function AddModal({
         <div className="modal-fields">
           {(isClient || isCommercial) && (
             <>
-              <label>
-                <span>{isClient ? "Nom de famille" : "Nom"}</span>
-                <input
-                  value={nom}
-                  onChange={(e) => setNom(e.target.value)}
-                  placeholder={isClient ? "Nom du client" : "Nom du commercial"}
-                  required
-                />
-              </label>
-              <label>
-                <span>Prénom</span>
-                <input
-                  value={prenom}
-                  onChange={(e) => setPrenom(e.target.value)}
-                  autoComplete="given-name"
-                />
-              </label>
+              {isClient ? (
+                <label>
+                  <span>Nom et prénoms</span>
+                  <input
+                    value={nom}
+                    onChange={(e) => setNom(e.target.value)}
+                    placeholder="Nom et prénoms du client"
+                    maxLength={150}
+                    required
+                  />
+                </label>
+              ) : (
+                <label>
+                  <span>Nom et prénoms</span>
+                  <input
+                    value={nom}
+                    onChange={(e) => setNom(e.target.value)}
+                    placeholder="Nom et prénoms du commercial"
+                    maxLength={80}
+                    required
+                  />
+                </label>
+              )}
               {isClient && (
                 <label>
                   <span>Type</span>
@@ -439,14 +484,56 @@ export default function AddModal({
                 </label>
               )}
               {isCommercial && (
-                <label>
-                  <span>Abréviation</span>
-                  <input
-                    value={abreviation}
-                    onChange={(e) => setAbreviation(e.target.value)}
-                    maxLength={10}
-                  />
-                </label>
+                <>
+                  {optionsLoading && (
+                    <p className="text-sm text-slate-500">
+                      Chargement des agences…
+                    </p>
+                  )}
+                  {optionsError && (
+                    <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      Chargement des agences impossible : {optionsError}
+                    </p>
+                  )}
+                  <label>
+                    <span>Agence</span>
+                    <select
+                      value={agencyId}
+                      onChange={(event) => setAgencyId(event.target.value)}
+                      disabled={optionsLoading || Boolean(optionsError)}
+                    >
+                      <option value="">Choisir une agence</option>
+                      {agencies.map((agency) => (
+                        <option key={agency.id} value={agency.id}>
+                          {agency.nom}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Code agence</span>
+                    <select
+                      value={agencyId}
+                      onChange={(event) => setAgencyId(event.target.value)}
+                      disabled={optionsLoading || Boolean(optionsError)}
+                    >
+                      <option value="">Choisir un code agence</option>
+                      {agencies.map((agency) => (
+                        <option key={agency.id} value={agency.id}>
+                          {agency.code}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Abréviation</span>
+                    <input
+                      value={abreviation}
+                      onChange={(e) => setAbreviation(e.target.value)}
+                      maxLength={10}
+                    />
+                  </label>
+                </>
               )}
               <label>
                 <span>Téléphone</span>
@@ -454,7 +541,6 @@ export default function AddModal({
                   value={telephone}
                   onChange={(e) => setTelephone(e.target.value)}
                   placeholder="+229 ..."
-                  required={isClient}
                   autoComplete="tel"
                 />
               </label>
@@ -749,6 +835,7 @@ export default function AddModal({
             disabled={
               loading ||
               optionsLoading ||
+              (isCommercial && Boolean(optionsError)) ||
               (needsAssociations &&
                 (Boolean(optionsError) ||
                 vehicles.length === 0 ||

@@ -6,6 +6,7 @@ import type {
   Repositories,
   Vehicule,
 } from "../../repositories/types.js"
+import { badRequest } from "../../lib/httpErrors.js"
 
 export interface BilanReport {
   periode_str: string
@@ -218,6 +219,7 @@ function buildRange(
   debut: string,
   fin: string,
   segment: string,
+  commercialIds?: ReadonlySet<number>,
 ) {
   const periodEndExclusive = shiftDay(fin, 1)
   const vehicles = sources.vehicles.filter((vehicle) =>
@@ -225,7 +227,13 @@ function buildRange(
   )
   const vehicleMap = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]))
   const categories = new Map<number, string>()
-  const validLocations = sources.locations.filter((location) => vehicleMap.has(location.vehiculeId))
+  const validLocations = sources.locations.filter(
+    (location) =>
+      vehicleMap.has(location.vehiculeId) &&
+      (!commercialIds ||
+        (location.commercialId !== null &&
+          commercialIds.has(location.commercialId))),
+  )
   const rentalsStarted = validLocations.filter((location) => {
     const start = dayDate(location.dateDebut)
     return start != null && start >= debut && start <= fin
@@ -478,27 +486,67 @@ function percentChange(current: number, previous: number): number | null {
 
 export async function buildBilanReport(
   repos: Repositories,
-  options: { debut?: string; fin?: string; segment?: string },
+  options: {
+    debut?: string
+    fin?: string
+    segment?: string
+    agenceId?: number
+  },
 ): Promise<BilanReport> {
   const segment = options.segment ?? "LCD"
   if (!["LCD", "LLD", "LEASING", "IMPRO", "AUTRE", "ALL"].includes(segment)) {
     throw new Error("Segment statistique invalide.")
   }
   const [debut, fin] = parsePeriod(options.debut, options.fin)
-  const [vehicles, locations, passages, maintenances, commercials, sinistres] = await Promise.all([
+  const [
+    vehicles,
+    locations,
+    selectedAgency,
+    passages,
+    maintenances,
+    commercials,
+    sinistres,
+  ] = await Promise.all([
     repos.vehicules.list(),
     repos.locations.list(),
+    options.agenceId === undefined
+      ? Promise.resolve(null)
+      : repos.agences.get(options.agenceId),
     repos.passagesGarage.list(),
     repos.maintenances.list(),
     repos.commerciaux.list(),
     repos.stats.immobilisationsSinistres(),
   ])
-  const sources: ReportSources = { vehicles, locations, passages, maintenances, commercials, sinistres }
-  const current = buildRange(sources, debut, fin, segment)
+  if (options.agenceId !== undefined && selectedAgency === null) {
+    throw badRequest("Agence statistique introuvable.")
+  }
+  const commercialIds =
+    options.agenceId === undefined
+      ? undefined
+      : new Set(
+          commercials
+            .filter((commercial) => commercial.agenceId === options.agenceId)
+            .map((commercial) => commercial.id),
+        )
+  const sources: ReportSources = {
+    vehicles,
+    locations,
+    passages,
+    maintenances,
+    commercials,
+    sinistres,
+  }
+  const current = buildRange(sources, debut, fin, segment, commercialIds)
   const periodLength = Math.floor((utcDay(fin) - utcDay(debut)) / DAY_MS) + 1
   const previousEnd = shiftDay(debut, -1)
   const previousStart = shiftDay(previousEnd, -(periodLength - 1))
-  const previous = buildRange(sources, previousStart, previousEnd, segment).summary
+  const previous = buildRange(
+    sources,
+    previousStart,
+    previousEnd,
+    segment,
+    commercialIds,
+  ).summary
   const summary = current.summary
   const keys = current.monthRows.map((month) => month.key)
   const fullPeriod = `${debut.slice(8, 10)}/${debut.slice(5, 7)}/${debut.slice(0, 4)} au ${fin.slice(8, 10)}/${fin.slice(5, 7)}/${fin.slice(0, 4)}`
@@ -640,17 +688,37 @@ export async function buildBilanReport(
     `${fr(summary.immobilization, 3)} %`,
   ]
   const monthCount = keys.length
-  const warning = monthCount > 12
-    ? "Plus de 12 mois sélectionnés ; les tableaux mensuels seront très serrés."
-    : summary.noVehicles
-      ? `Aucun véhicule n'est enregistré dans le segment ${segment}.`
-      : null
+  const warning = selectedAgency
+    ? summary.noRentals
+      ? "Agence : aucune location attribuée ; flotte et immobilisations restent globales."
+      : "Agence : locations et CA filtrés via le commercial ; flotte et immobilisations restent globales."
+    : monthCount > 12
+      ? "Plus de 12 mois sélectionnés ; les tableaux mensuels seront très serrés."
+      : summary.noVehicles
+        ? `Aucun véhicule n'est enregistré dans le segment ${segment}.`
+        : null
+  const segmentLabel: Record<string, string> = {
+    LCD: "Location courte durée (LCD)",
+    LLD: "Location longue durée (LLD)",
+    LEASING: "Leasing",
+    IMPRO: "Impro",
+    AUTRE: "Autre",
+    ALL: "Tous les segments",
+  }
+  const perimetre = [
+    segmentLabel[segment] ?? segment,
+    selectedAgency
+      ? `Agence ${selectedAgency.nom}${selectedAgency.code ? ` (${selectedAgency.code})` : ""}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
 
   return {
     periode_str: fullPeriod,
     date_edition: new Date().toLocaleDateString("fr-FR"),
     edite_par: "Direction d'exploitation",
-    perimetre: segment === "ALL" ? "Tous les segments" : "Flotte de location courte durée",
+    perimetre,
     mois_couverts: monthCount,
     vehicules_moyenne: fr(avgVehicleCount, 1),
     periode_label: fullPeriod,

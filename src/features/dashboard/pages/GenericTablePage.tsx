@@ -13,7 +13,12 @@ import { apiFetch, exportUrl } from "@/shared/api/client"
 
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
-import { downloadCsv, parseCsv } from "@/shared/data/csv"
+import {
+  downloadCsv,
+  downloadXlsx,
+  parseCsv,
+  readCsvFile,
+} from "@/shared/data/csv"
 
 import {
   fetchTable,
@@ -34,8 +39,7 @@ import type { DashboardOutletContext } from "../DashboardLayout"
 type ManagedModule = "Clients" | "Commerciaux"
 
 const clientCsvHeaders = [
-  "Nom",
-  "Prenom",
+  "Nom et prénoms",
   "Type",
   "Telephone",
   "Email",
@@ -44,12 +48,14 @@ const clientCsvHeaders = [
 ]
 
 const clientTypes = new Set(["Particulier", "Entreprise", "Organisation"])
+const clientDropdowns = {
+  Type: ["Particulier", "Entreprise", "Organisation"],
+}
 
 const clientCsvExamples = [
   [
-    "ARCS BENIN",
-    "Koffi",
-    "Entreprise",
+    "Koffi AGBODJAN",
+    "Particulier",
     "+229 97 00 11 22",
     "contact@arcs.bj",
     "Cotonou",
@@ -57,7 +63,6 @@ const clientCsvExamples = [
   ],
   [
     "HERTZ BENIN",
-    "Aïcha",
     "Organisation",
     "+229 96 33 44 55",
     "aicha@hertz.bj",
@@ -67,8 +72,7 @@ const clientCsvExamples = [
 ]
 
 const commercialCsvHeaders = [
-  "Prenom",
-  "NOM",
+  "Nom et prénoms",
   "Abreviations",
   "Agence",
   "Code Agence",
@@ -78,8 +82,7 @@ const commercialCsvHeaders = [
 
 const commercialCsvExamples = [
   [
-    "EXEMPLE - Ulrich",
-    "ADOKO",
+    "EXEMPLE - ADOKO Ulrich",
     "UA",
     "Agence principale",
     "APS",
@@ -87,8 +90,7 @@ const commercialCsvExamples = [
     "ulrich.adoko@example.com",
   ],
   [
-    "EXEMPLE - Deborah",
-    "PADONOU",
+    "EXEMPLE - PADONOU Deborah",
     "DP",
     "Agence aéroport",
     "ABC",
@@ -96,6 +98,13 @@ const commercialCsvExamples = [
     "deborah.padonou@example.com",
   ],
 ]
+
+interface CommercialAgencyOption {
+  id: number
+  nom: string
+  code: string
+  actif: boolean
+}
 
 const reservationCsvHeaders = [
   "Immatriculation",
@@ -160,6 +169,15 @@ const reservationCsvExamples = [
   ],
 ]
 
+const reservationDropdowns = {
+  "Statut de la résa": ["À venir", "En cours", "Terminée", "Annulée"],
+  "Statut de la facturation": [
+    "En attente de bon de commande",
+    "Facture émise, paiement en attente",
+    "Paiement effectué",
+  ],
+}
+
 function todayCsvDate(): string {
   const today = new Date()
   return `${String(today.getDate()).padStart(2, "0")}/${String(
@@ -167,26 +185,12 @@ function todayCsvDate(): string {
   ).padStart(2, "0")}/${today.getFullYear()}`
 }
 
-const downloadClientTemplate = () => {
-  downloadCsv("modele-import-clients.csv", [
-    clientCsvHeaders,
-    ...clientCsvExamples,
-  ])
-}
+const clientTemplateRows = [clientCsvHeaders, ...clientCsvExamples]
 
 function csvDate(value: string | null | undefined): string {
   if (!value) return ""
   const [year, month, day] = value.slice(0, 10).split("-")
   return year && month && day ? `${day}/${month}/${year}` : ""
-}
-
-async function readCsvFile(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer()
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer)
-  } catch {
-    return new TextDecoder("windows-1252").decode(buffer)
-  }
 }
 
 export default function GenericTablePage({
@@ -257,6 +261,8 @@ export default function GenericTablePage({
   const [exportingLostAffairs, setExportingLostAffairs] = useState(false)
   const [reservationExportModalOpen, setReservationExportModalOpen] =
     useState(false)
+  const [reservationExportFormat, setReservationExportFormat] =
+    useState<"csv" | "xlsx">("csv")
   const [reservationExportMode, setReservationExportMode] =
     useState<"all" | "range">("all")
   const [reservationExportStartDate, setReservationExportStartDate] =
@@ -410,24 +416,61 @@ export default function GenericTablePage({
     }
   }
 
-  const downloadCommercialTemplate = () => {
-    downloadCsv("modele-import-commerciaux.csv", [
-      commercialCsvHeaders,
-      ...commercialCsvExamples,
-    ])
+  const downloadCommercialTemplate = async (format: "csv" | "xlsx") => {
+    setCsvError(null)
+    try {
+      const agencies =
+        await apiFetch<CommercialAgencyOption[]>("/api/parc/agences")
+      const activeAgencies = agencies.filter((agency) => agency.actif)
+      if (activeAgencies.length === 0) {
+        throw new Error("Aucune agence active disponible pour le modèle.")
+      }
+
+      const examples = commercialCsvExamples.map((example, index) => {
+        const agency = activeAgencies[index % activeAgencies.length]!
+        return [
+          example[0]!,
+          example[1]!,
+          agency.nom,
+          agency.code,
+          example[4]!,
+          example[5]!,
+        ]
+      })
+      const templateRows = [commercialCsvHeaders, ...examples]
+      if (format === "xlsx") {
+        await downloadXlsx("modele-import-commerciaux.xlsx", templateRows, {
+          dropdowns: {
+            Agence: activeAgencies.map((agency) => agency.nom),
+            "Code Agence": activeAgencies.map((agency) => agency.code),
+          },
+        })
+      } else {
+        downloadCsv("modele-import-commerciaux.csv", templateRows)
+      }
+    } catch (e: unknown) {
+      setCsvError(
+        e instanceof Error ? e.message : "Modèle commercial impossible",
+      )
+    }
   }
 
-  const exportCommercialsCsv = async () => {
+  const exportCommercialsCsv = async (format: "csv" | "xlsx") => {
     setCsvError(null)
 
     try {
-      const commercials =
-        await apiFetch<CommercialFicheDto[]>("/api/commerciaux")
+      const [commercials, agencies] = await Promise.all([
+        apiFetch<CommercialFicheDto[]>("/api/commerciaux"),
+        apiFetch<CommercialAgencyOption[]>("/api/parc/agences"),
+      ])
 
       const rows = commercials.map((commercial) => [
-        commercial.prenom ?? "",
-
-        commercial.nomFamille ?? commercial.nom,
+        [
+          commercial.nomFamille || commercial.nom,
+          commercial.prenom,
+        ]
+          .filter(Boolean)
+          .join(" "),
 
         commercial.abreviation ?? "",
 
@@ -440,38 +483,52 @@ export default function GenericTablePage({
         commercial.email ?? "",
       ])
 
-      downloadCsv("export-commerciaux.csv", [commercialCsvHeaders, ...rows])
+      const exportRows = [commercialCsvHeaders, ...rows]
+      if (format === "xlsx") {
+        await downloadXlsx("export-commerciaux.xlsx", exportRows, {
+          dropdowns: {
+            Agence: agencies.map((agency) => agency.nom),
+            "Code Agence": agencies.map((agency) => agency.code),
+          },
+        })
+      } else {
+        downloadCsv("export-commerciaux.csv", exportRows)
+      }
     } catch (e: unknown) {
       setCsvError(e instanceof Error ? e.message : "Export CSV impossible")
     }
   }
 
-  const exportClientsCsv = async () => {
+  const exportClientsCsv = async (format: "csv" | "xlsx" = "csv") => {
     setCsvError(null)
     try {
       const clients =
         await apiFetch<Array<{
           nom: string
-          nomFamille?: string
-          prenom?: string | null
           type: string
           telephone: string
           email?: string | null
           adresse?: string | null
           numPermis?: string | null
         }>>("/api/clients")
-      downloadCsv("export-clients.csv", [
+      const exportRows = [
         clientCsvHeaders,
         ...clients.map((client) => [
-          client.nomFamille ?? client.nom,
-          client.prenom ?? "",
+          client.nom,
           client.type,
           client.telephone,
           client.email ?? "",
           client.adresse ?? "",
           client.numPermis ?? "",
         ]),
-      ])
+      ]
+      if (format === "xlsx") {
+        await downloadXlsx("export-clients.xlsx", exportRows, {
+          dropdowns: clientDropdowns,
+        })
+      } else {
+        downloadCsv("export-clients.csv", exportRows)
+      }
     } catch (e: unknown) {
       setCsvError(e instanceof Error ? e.message : "Export CSV impossible")
     }
@@ -485,12 +542,19 @@ export default function GenericTablePage({
     setImportingCsv(true)
     setCsvError(null)
     try {
-      const rows = parseCsv(await readCsvFile(file)).slice(1)
+      const [headers, ...rows] = parseCsv(await readCsvFile(file))
+      const legacyNameColumns = headers?.some((header) =>
+        ["prenom", "prénom"].includes(header.trim().toLocaleLowerCase("fr")),
+      )
+      const expectedColumnCount = legacyNameColumns
+        ? clientCsvHeaders.length + 1
+        : clientCsvHeaders.length
       for (const [index, values] of rows.entries()) {
-        if (values.length < clientCsvHeaders.length) {
+        if (values.length < expectedColumnCount) {
           throw new Error(`Ligne ${index + 2} incomplète.`)
         }
-        const type = values[2].trim()
+        const typeIndex = legacyNameColumns ? 2 : 1
+        const type = values[typeIndex].trim()
         if (!clientTypes.has(type)) {
           throw new Error(`Type de client invalide à la ligne ${index + 2}.`)
         }
@@ -498,12 +562,12 @@ export default function GenericTablePage({
           method: "POST",
           body: {
             nom: values[0].trim(),
-            prenom: values[1].trim(),
+            ...(legacyNameColumns ? { prenom: values[1].trim() } : {}),
             type,
-            telephone: values[3].trim(),
-            email: values[4].trim(),
-            adresse: values[5].trim(),
-            numPermis: values[6].trim(),
+            telephone: values[typeIndex + 1].trim(),
+            email: values[typeIndex + 2].trim(),
+            adresse: values[typeIndex + 3].trim(),
+            numPermis: values[typeIndex + 4].trim(),
           },
         })
       }
@@ -519,7 +583,7 @@ export default function GenericTablePage({
     }
   }
 
-  const exportReservationsCsv = async () => {
+  const exportReservationsCsv = async (format: "csv" | "xlsx" = "csv") => {
     setCsvError(null)
     if (
       reservationExportMode === "range" &&
@@ -545,8 +609,9 @@ export default function GenericTablePage({
             })
           : reservations
       const count = (status: string) =>
-        selectedReservations.filter((reservation) => reservation.statut === status)
-          .length
+        selectedReservations.filter(
+          (reservation) => reservation.statut === status,
+        ).length
       const mobilizedVehicles = new Set(
         selectedReservations
           .filter((reservation) => reservation.statut === "En cours")
@@ -585,7 +650,7 @@ export default function GenericTablePage({
           ? `RÉSERVATIONS DU ${reservationExportStartDate.split("-").reverse().join("/")} AU ${reservationExportEndDate.split("-").reverse().join("/")}`
           : "RÉSERVATIONS"
       setReservationExportModalOpen(false)
-      downloadCsv(`export-reservations${suffix}.csv`, [
+      const exportRows = [
         [title],
         [
           "",
@@ -605,7 +670,15 @@ export default function GenericTablePage({
         ],
         reservationCsvHeaders,
         ...rows,
-      ])
+      ]
+      if (format === "xlsx") {
+        await downloadXlsx(`export-reservations${suffix}.xlsx`, exportRows, {
+          headerRow: 4,
+          dropdowns: reservationDropdowns,
+        })
+      } else {
+        downloadCsv(`export-reservations${suffix}.csv`, exportRows)
+      }
     } catch (e: unknown) {
       setCsvError(e instanceof Error ? e.message : "Export CSV impossible")
     }
@@ -667,6 +740,7 @@ export default function GenericTablePage({
     try {
       const result = await apiFetch<{
         created: number
+        clientsCreated?: number
         unresolvedClients?: number
         unresolvedCommercials?: number
       }>("/api/reservations/import-csv", {
@@ -677,6 +751,11 @@ export default function GenericTablePage({
       const notices = [
         `Import terminé : ${result.created} réservation(s) ajoutée(s).`,
       ]
+      if (result.clientsCreated) {
+        notices.push(
+          `${result.clientsCreated} nouveau(x) client(s) créé(s).`,
+        )
+      }
       if (result.unresolvedClients) {
         notices.push(
           `${result.unresolvedClients} client(s) importé(s) sans fiche correspondante.`,
@@ -747,10 +826,17 @@ export default function GenericTablePage({
           <button
             type="button"
             className="secondary"
-            title="Les lignes dont le prénom commence par EXEMPLE sont ignorées à l’import."
-            onClick={downloadCommercialTemplate}
+            title="Les lignes dont le nom commence par EXEMPLE sont ignorées à l’import."
+            onClick={() => void downloadCommercialTemplate("csv")}
           >
             Modèle CSV
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void downloadCommercialTemplate("xlsx")}
+          >
+            Modèle Excel
           </button>
           <button
             type="button"
@@ -758,14 +844,21 @@ export default function GenericTablePage({
             onClick={() => csvInput.current?.click()}
             disabled={importingCsv}
           >
-            {importingCsv ? "Import…" : "Importer CSV"}
+            {importingCsv ? "Import…" : "Importer CSV/Excel"}
           </button>
           <button
             type="button"
             className="primary small"
-            onClick={() => void exportCommercialsCsv()}
+            onClick={() => void exportCommercialsCsv("csv")}
           >
             Exporter CSV
+          </button>
+          <button
+            type="button"
+            className="primary small"
+            onClick={() => void exportCommercialsCsv("xlsx")}
+          >
+            Exporter Excel
           </button>
         </div>,
       )
@@ -778,9 +871,28 @@ export default function GenericTablePage({
           <button
             type="button"
             className="secondary"
-            onClick={downloadClientTemplate}
+            onClick={() =>
+              downloadCsv("modele-import-clients.csv", clientTemplateRows)
+            }
           >
             Modèle CSV
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              void downloadXlsx(
+                "modele-import-clients.xlsx",
+                clientTemplateRows,
+                { dropdowns: clientDropdowns },
+              ).catch((e: unknown) =>
+                setCsvError(
+                  e instanceof Error ? e.message : "Modèle Excel impossible",
+                ),
+              )
+            }
+          >
+            Modèle Excel
           </button>
           <button
             type="button"
@@ -788,7 +900,7 @@ export default function GenericTablePage({
             onClick={() => clientCsvInput.current?.click()}
             disabled={importingCsv}
           >
-            {importingCsv ? "Import…" : "Importer CSV"}
+            {importingCsv ? "Import…" : "Importer CSV/Excel"}
           </button>
           <button
             type="button"
@@ -796,6 +908,13 @@ export default function GenericTablePage({
             onClick={() => void exportClientsCsv()}
           >
             Exporter CSV
+          </button>
+          <button
+            type="button"
+            className="primary small"
+            onClick={() => void exportClientsCsv("xlsx")}
+          >
+            Exporter Excel
           </button>
         </div>,
       )
@@ -824,17 +943,55 @@ export default function GenericTablePage({
         <button
           type="button"
           className="secondary vehicle-csv-button"
+          title="Les statuts des réservations disposent de listes déroulantes."
+          onClick={() =>
+            void downloadXlsx(
+              "modele-import-reservations.xlsx",
+              [
+                reservationCsvHeaders,
+                ...reservationCsvExamples.map((example) =>
+                  example.map((value, index) =>
+                    index === 3 ? todayCsvDate() : value,
+                  ),
+                ),
+              ],
+              { dropdowns: reservationDropdowns },
+            ).catch((e: unknown) =>
+              setCsvError(
+                e instanceof Error ? e.message : "Modèle Excel impossible",
+              ),
+            )
+          }
+        >
+          Modèle Excel
+        </button>
+        <button
+          type="button"
+          className="secondary vehicle-csv-button"
           onClick={() => csvInput.current?.click()}
           disabled={importingCsv}
         >
-          {importingCsv ? "Import…" : "Importer CSV"}
+          {importingCsv ? "Import…" : "Importer CSV/Excel"}
         </button>
         <button
           type="button"
           className="primary small vehicle-csv-button"
-          onClick={() => setReservationExportModalOpen(true)}
+          onClick={() => {
+            setReservationExportFormat("csv")
+            setReservationExportModalOpen(true)
+          }}
         >
           Exporter CSV
+        </button>
+        <button
+          type="button"
+          className="primary small vehicle-csv-button"
+          onClick={() => {
+            setReservationExportFormat("xlsx")
+            setReservationExportModalOpen(true)
+          }}
+        >
+          Exporter Excel
         </button>
         <button
           type="button"
@@ -847,8 +1004,8 @@ export default function GenericTablePage({
         <input
           ref={csvInput}
           type="file"
-          accept=".csv,text/csv"
-          aria-label="Sélectionner un fichier CSV de réservations"
+          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          aria-label="Sélectionner un fichier CSV ou Excel de réservations"
           hidden
           onChange={(event) => void importReservationsCsv(event)}
         />
@@ -916,7 +1073,7 @@ export default function GenericTablePage({
               <input
                 ref={csvInput}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 aria-label="Sélectionner un fichier CSV de commerciaux"
                 hidden
                 onChange={(event) => void importCommercialsCsv(event)}
@@ -928,8 +1085,8 @@ export default function GenericTablePage({
               <input
                 ref={clientCsvInput}
                 type="file"
-                accept=".csv,text/csv"
-                aria-label="Sélectionner un fichier CSV de clients"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                aria-label="Sélectionner un fichier CSV ou Excel de clients"
                 hidden
                 onChange={(event) => void importClientsCsv(event)}
               />
@@ -1011,7 +1168,7 @@ export default function GenericTablePage({
             className="modal"
             onSubmit={(event) => {
               event.preventDefault()
-              void exportReservationsCsv()
+              void exportReservationsCsv(reservationExportFormat)
             }}
           >
             <button
@@ -1022,7 +1179,9 @@ export default function GenericTablePage({
             >
               <Icon name="close" />
             </button>
-            <p className="kicker">EXPORT DES RÉSERVATIONS</p>
+            <p className="kicker">
+              EXPORT DES RÉSERVATIONS · {reservationExportFormat.toUpperCase()}
+            </p>
             <h2>Choisir la période</h2>
             <div className="modal-fields">
               <label>
@@ -1030,7 +1189,9 @@ export default function GenericTablePage({
                 <select
                   value={reservationExportMode}
                   onChange={(event) =>
-                    setReservationExportMode(event.target.value as "all" | "range")
+                    setReservationExportMode(
+                      event.target.value as "all" | "range",
+                    )
                   }
                 >
                   <option value="all">Toutes les réservations</option>
@@ -1072,7 +1233,9 @@ export default function GenericTablePage({
               >
                 Annuler
               </button>
-              <button className="primary small">Exporter CSV</button>
+              <button className="primary small">
+                Exporter {reservationExportFormat === "xlsx" ? "Excel" : "CSV"}
+              </button>
             </div>
           </form>
         </div>
@@ -1081,27 +1244,47 @@ export default function GenericTablePage({
         <table>
           <thead>
             <tr>
-              {filtered.headers.map((h) => (
-                <th key={h}>{h}</th>
-              ))}
+              {filtered.headers.map((h) => {
+                if (
+                  module === "Commerciaux" &&
+                  h === "Agence d’appartenance"
+                ) {
+                  return null
+                }
+                return <th key={h}>{h}</th>
+              })}
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {pageRows?.map((row, i) => (
               <tr key={`${row[0]}-${i}`}>
-                {row.map((cell, index) => (
-                  <td key={`${row[0]}-${index}`}>
-                    {index === 0 ? (
-                      <strong>{cell}</strong>
-                    ) : index ===
-                      (module === "Réservations" ? 11 : row.length - 1) ? (
-                      <StatusBadge value={cell} />
-                    ) : (
-                      cell
-                    )}
-                  </td>
-                ))}
+                {row.map((cell, index) => {
+                  if (
+                    module === "Commerciaux" &&
+                    index ===
+                      filtered.headers.indexOf("Agence d’appartenance")
+                  ) {
+                    return null
+                  }
+                  const statusColumn =
+                    module === "Réservations"
+                      ? 11
+                      : module === "Commerciaux"
+                        ? 4
+                        : row.length - 1
+                  return (
+                    <td key={`${row[0]}-${index}`}>
+                      {index === 0 ? (
+                        <strong>{cell}</strong>
+                      ) : index === statusColumn ? (
+                        <StatusBadge value={cell} />
+                      ) : (
+                        cell
+                      )}
+                    </td>
+                  )
+                })}
                 <td className="actions">
                   <button
                     title="Voir les détails"

@@ -13,7 +13,12 @@ import { apiFetch } from "@/shared/api/client"
 
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
-import { downloadCsv, parseCsv } from "@/shared/data/csv"
+import {
+  downloadCsv,
+  downloadXlsx,
+  parseCsv,
+  readCsvFile,
+} from "@/shared/data/csv"
 
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 
@@ -160,24 +165,42 @@ export default function ConducteursPage() {
 
   useEffect(() => setPage(1), [query])
 
-  const exportCsv = () => {
-    downloadCsv("export-conducteurs.csv", [
-      csvHeaders,
-
-      ...rows.map((row) => [
-        row.nom,
-
-        row.prenom ?? "",
-
-        row.telephone ?? "",
-
-        row.numPermis ?? "",
-
-        row.categorie,
-
-        row.client ?? "",
-      ]),
-    ])
+  const driverRows = [
+    csvHeaders,
+    ...rows.map((row) => [
+      row.nom,
+      row.prenom ?? "",
+      row.telephone ?? "",
+      row.numPermis ?? "",
+      row.categorie,
+      row.client ?? "",
+    ]),
+  ]
+  const driverDropdowns = {
+    Catégorie: ["CLIENT", "CHAUFFEUR_HERTZ", "EMPLOYE_HERTZ", "AUTRE"],
+  }
+  const exportCsv = () => downloadCsv("export-conducteurs.csv", driverRows)
+  const exportXlsx = () => {
+    void downloadXlsx("export-conducteurs.xlsx", driverRows, {
+      dropdowns: driverDropdowns,
+    }).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Export Excel impossible",
+      ),
+    )
+  }
+  const downloadTemplateXlsx = () => {
+    void downloadXlsx(
+      "modele-import-conducteurs.xlsx",
+      [csvHeaders, ...csvExamples],
+      {
+        dropdowns: driverDropdowns,
+      },
+    ).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Modèle Excel impossible",
+      ),
+    )
   }
 
   const importCsv = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -199,7 +222,7 @@ export default function ConducteursPage() {
         ]),
       )
 
-      const values = parseCsv(await file.text()).slice(1)
+      const values = parseCsv(await readCsvFile(file)).slice(1)
 
       for (const [index, row] of values.entries()) {
         if (row.length < csvHeaders.length) {
@@ -271,13 +294,23 @@ export default function ConducteursPage() {
         <button
           className="secondary"
           type="button"
+          onClick={downloadTemplateXlsx}
+        >
+          Modèle Excel
+        </button>
+        <button
+          className="secondary"
+          type="button"
           onClick={() => csvInput.current?.click()}
           disabled={importing}
         >
-          {importing ? "Import…" : "Importer CSV"}
+          {importing ? "Import…" : "Importer CSV/Excel"}
         </button>
         <button className="primary small" type="button" onClick={exportCsv}>
           Exporter CSV
+        </button>
+        <button className="primary small" type="button" onClick={exportXlsx}>
+          Exporter Excel
         </button>
       </div>,
     )
@@ -316,7 +349,7 @@ export default function ConducteursPage() {
           <input
             ref={csvInput}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             hidden
             onChange={(event) => void importCsv(event)}
           />

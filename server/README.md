@@ -176,13 +176,13 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | PUT     | `/vehicules/:id`                       | resp | modification                             |
 | DELETE  | `/vehicules/:id`                       | resp | 204 uniquement pour `ENTREE_PARC`, `RETOUR_LOCATION`, `RETOUR_INTERNE`, `RETOUR_GARAGE` ou `SORTIE_DEFINITIVE`, si aucune autre table ne le référence; sinon 409. |
 | GET     | `/clients`, `/clients/:id`, `/clients/:id/fiche` | resp | + fiche enrichie (nb locations, dernière opération) |
-| POST/PUT/DELETE | `/clients`, `/clients/:id`           | resp | création, modification, suppression protégée si historique |
+| POST/PUT/DELETE | `/clients`, `/clients/:id`           | resp | nom complet requis; type et coordonnées facultatifs (type Particulier par défaut); suppression protégée si historique |
 | GET     | `/commerciaux`, `/commerciaux/:id`     | resp | fiches avec CA + performance calculés    |
-| POST    | `/commerciaux/import-csv`                | resp | import validé par abréviation et code agence; téléphone et email facultatifs |
+| POST    | `/commerciaux/import-csv`                | resp | import depuis le modèle CSV ou Excel avec « Nom et prénoms » (ancien format Prénom/NOM accepté), agence et code agence validés; téléphone et email facultatifs |
 | POST/PUT/DELETE | `/commerciaux`, `/commerciaux/:id`  | resp | création, modification, désactivation    |
 | GET     | `/locations?q&limit`, `/locations/:id` | resp | fiches avec noms client/véhicule         |
 | POST    | `/locations`                           | resp | création LCD/LLD avec contrôle de disponibilité |
-| POST    | `/locations/import-csv`                | resp | import depuis le modèle Excel; résout client, véhicule et commercial existants, contrôle dates et disponibilité, conserve aussi les colonnes de suivi facturation/paiement |
+| POST    | `/locations/import-csv`                | resp | import depuis le modèle Excel; crée les clients absents (type Particulier par défaut), résout véhicule et commercial, contrôle dates et disponibilité, conserve aussi les colonnes de suivi facturation/paiement |
 | GET     | `/reservations`, `/reservations/:id`   | resp | fiches avec noms client/commercial       |
 | GET/POST | `/contraventions`                    | resp | liste et création des contraventions      |
 | PUT/DELETE | `/contraventions/:id`               | resp | modification et suppression               |

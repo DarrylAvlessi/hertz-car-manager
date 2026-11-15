@@ -6,6 +6,7 @@ $logPath = Join-Path $logDirectory "startup.log"
 $frontendPort = 8443
 $backendPort = 3101
 $mysqlPort = 3306
+$serverEnvPath = Join-Path $projectRoot "server\.env"
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
@@ -13,6 +14,23 @@ function Write-StartupLog {
   param([string]$Message)
 
   Add-Content -Path $logPath -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
+}
+
+if (Test-Path $serverEnvPath) {
+  $dbPortSetting = Get-Content $serverEnvPath |
+    Where-Object { $_ -match '^\s*DB_PORT\s*=' } |
+    Select-Object -Last 1
+
+  if ($dbPortSetting) {
+    if ($dbPortSetting -notmatch '^\s*DB_PORT\s*=\s*"?(\d+)"?\s*(?:#.*)?$') {
+      throw "DB_PORT in server/.env must be a valid port number."
+    }
+
+    $mysqlPort = [int]$matches[1]
+    if ($mysqlPort -lt 1 -or $mysqlPort -gt 65535) {
+      throw "DB_PORT in server/.env must be between 1 and 65535."
+    }
+  }
 }
 
 function Test-PortListening {
@@ -106,30 +124,44 @@ try {
   $npmCommand = Get-Command "npm.cmd" -ErrorAction Stop
   $script:npmPath = $npmCommand.Source
 
-  Start-LocalService `
-    -Name "Frontend Vite" `
-    -Port $frontendPort `
-    -HealthPath "/" `
-    -Command "run dev -- --host 127.0.0.1" `
-    -OutputLog "frontend.stdout.log" `
-    -ErrorLog "frontend.stderr.log"
+  $nextMysqlLog = [DateTime]::MinValue
+  while ($true) {
+    try {
+      if (-not (Test-HttpService -Port $frontendPort -Path "/")) {
+        Start-LocalService `
+          -Name "Frontend Vite" `
+          -Port $frontendPort `
+          -HealthPath "/" `
+          -Command "run dev -- --host 127.0.0.1" `
+          -OutputLog "frontend.stdout.log" `
+          -ErrorLog "frontend.stderr.log"
+      }
 
-  $mysqlDeadline = (Get-Date).AddSeconds(30)
-  while (-not (Test-PortListening -Port $mysqlPort) -and (Get-Date) -lt $mysqlDeadline) {
-    Start-Sleep -Seconds 3
+      if (Test-PortListening -Port $mysqlPort) {
+        if ($nextMysqlLog -ne [DateTime]::MinValue) {
+          Write-StartupLog "MySQL is available on port $mysqlPort."
+          $nextMysqlLog = [DateTime]::MinValue
+        }
+
+        if (-not (Test-HttpService -Port $backendPort -Path "/health")) {
+          Start-LocalService `
+            -Name "API Hertz" `
+            -Port $backendPort `
+            -HealthPath "/health" `
+            -Command "run server:dev" `
+            -OutputLog "backend.stdout.log" `
+            -ErrorLog "backend.stderr.log"
+        }
+      } elseif ((Get-Date) -ge $nextMysqlLog) {
+        Write-StartupLog "Waiting for MySQL on port $mysqlPort before starting the API."
+        $nextMysqlLog = (Get-Date).AddSeconds(30)
+      }
+    } catch {
+      Write-StartupLog "Service supervision error: $($_.Exception.Message)"
+    }
+
+    Start-Sleep -Seconds 10
   }
-
-  if (-not (Test-PortListening -Port $mysqlPort)) {
-    throw "MySQL is not available after 30 seconds. Start MySQL in Laragon."
-  }
-
-  Start-LocalService `
-    -Name "API Hertz" `
-    -Port $backendPort `
-    -HealthPath "/health" `
-    -Command "run server:dev" `
-    -OutputLog "backend.stdout.log" `
-    -ErrorLog "backend.stderr.log"
 } catch {
   Write-StartupLog "Startup error: $($_.Exception.Message)"
   exit 1

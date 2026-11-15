@@ -389,7 +389,7 @@ export interface ClientInput {
 
   type: ClientType
 
-  telephone: string
+  telephone?: string
 
   email?: string
 

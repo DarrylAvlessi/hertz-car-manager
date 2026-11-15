@@ -12,7 +12,12 @@ import { apiFetch } from "@/shared/api/client"
 
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 
-import { downloadCsv, parseCsv } from "@/shared/data/csv"
+import {
+  downloadCsv,
+  downloadXlsx,
+  parseCsv,
+  readCsvFile,
+} from "@/shared/data/csv"
 
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 import type { DashboardOutletContext } from "../DashboardLayout"
@@ -154,7 +159,7 @@ export default function CentersPage() {
           client.id,
         ]),
       )
-      const rows = parseCsv(await file.text()).slice(1)
+      const rows = parseCsv(await readCsvFile(file)).slice(1)
       for (const [index, values] of rows.entries()) {
         if (values.length < 3) throw new Error(`Ligne ${index + 2} incomplète.`)
         const type = values[1].trim().toUpperCase() as CentreType
@@ -187,11 +192,37 @@ export default function CentersPage() {
     }
   }
 
-  const exportCsv = () => {
-    downloadCsv("export-centres.csv", [
-      ["Nom", "Type", "Client associé"],
-      ...rows.map((row) => [row.nom, row.typeCentre, row.client ?? ""]),
-    ])
+  const centreHeaders = ["Nom", "Type", "Client associé"]
+  const centreRows = [
+    centreHeaders,
+    ...rows.map((row) => [row.nom, row.typeCentre, row.client ?? ""]),
+  ]
+  const centreTemplateRows = [
+    centreHeaders,
+    ["Centre exemple", "SOCIETE", "ARCS BENIN"],
+    ["Centre clientèle", "CLIENT", "HERTZ BENIN"],
+  ]
+  const centreDropdowns = {
+    Type: ["SOCIETE", "CLIENT", "PERSONNE", "AUTRE"],
+  }
+  const exportCsv = () => downloadCsv("export-centres.csv", centreRows)
+  const exportXlsx = () => {
+    void downloadXlsx("export-centres.xlsx", centreRows, {
+      dropdowns: centreDropdowns,
+    }).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Export Excel impossible",
+      ),
+    )
+  }
+  const downloadTemplateXlsx = () => {
+    void downloadXlsx("modele-import-centres.xlsx", centreTemplateRows, {
+      dropdowns: centreDropdowns,
+    }).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Modèle Excel impossible",
+      ),
+    )
   }
 
   useEffect(() => {
@@ -201,11 +232,7 @@ export default function CentersPage() {
           className="secondary"
           type="button"
           onClick={() =>
-            downloadCsv("modele-import-centres.csv", [
-              ["Nom", "Type", "Client associé"],
-              ["Centre exemple", "SOCIETE", "ARCS BENIN"],
-              ["Centre clientèle", "CLIENT", "HERTZ BENIN"],
-            ])
+            downloadCsv("modele-import-centres.csv", centreTemplateRows)
           }
         >
           Modèle CSV
@@ -213,13 +240,23 @@ export default function CentersPage() {
         <button
           className="secondary"
           type="button"
+          onClick={downloadTemplateXlsx}
+        >
+          Modèle Excel
+        </button>
+        <button
+          className="secondary"
+          type="button"
           onClick={() => csvInput.current?.click()}
           disabled={importing}
         >
-          {importing ? "Import…" : "Importer CSV"}
+          {importing ? "Import…" : "Importer CSV/Excel"}
         </button>
         <button className="primary small" type="button" onClick={exportCsv}>
           Exporter CSV
+        </button>
+        <button className="primary small" type="button" onClick={exportXlsx}>
+          Exporter Excel
         </button>
       </div>,
     )
@@ -237,8 +274,8 @@ export default function CentersPage() {
           <input
             ref={csvInput}
             type="file"
-            accept=".csv,text/csv"
-            aria-label="Sélectionner un fichier CSV de centres"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            aria-label="Sélectionner un fichier CSV ou Excel de centres"
             hidden
             onChange={(event) => void importCsv(event)}
           />

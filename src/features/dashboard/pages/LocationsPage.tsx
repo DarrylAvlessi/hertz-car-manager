@@ -14,25 +14,14 @@ import { apiFetch } from "@/shared/api/client"
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
 import { canUseVehicleForNewOperation } from "@/shared/data/vehicleStatus"
 
-import { downloadCsv } from "@/shared/data/csv"
+import { downloadCsv, downloadXlsx, readCsvFile } from "@/shared/data/csv"
 
-import TablePagination, {
-  TABLE_PAGE_SIZE,
-} from "../components/TablePagination"
+import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 import DatePeriodFilter, {
   matchesDatePeriod,
   type DatePeriod,
 } from "../components/DatePeriodFilter"
 import type { DashboardOutletContext } from "../DashboardLayout"
-
-async function readCsvFile(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer()
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer)
-  } catch {
-    return new TextDecoder("windows-1252").decode(buffer)
-  }
-}
 
 type Location = {
   id: number
@@ -129,6 +118,49 @@ const locationCsvHeaders = [
 
   "Statut",
 ]
+
+const locationCsvExamples: Array<Array<string | number>> = [
+  [
+    "EXEMPLE - À remplacer",
+    "EXEMPLE",
+    "01/01/2026",
+    "02/01/2026",
+    1,
+    "TPE",
+    "EXEMPLE",
+    "01/01/2026",
+    30000,
+    "Oui",
+    "01/01/2026",
+    "COMM-001",
+    "Location professionnelle",
+    "Courte durée",
+    "EN_COURS",
+  ],
+  [
+    "HERTZ BENIN",
+    "AB 1234 RB",
+    "05/02/2026",
+    "08/02/2026",
+    3,
+    "Virement",
+    "FACT-2026-002",
+    "08/02/2026",
+    90000,
+    "Non",
+    "N/A",
+    "COMM-002",
+    "Déplacement professionnel",
+    "Longue durée",
+    "TERMINEE",
+  ],
+]
+
+const locationDropdowns = {
+  PAYE: ["Oui", "Non"],
+  "Type de location": ["Courte durée", "Longue durée"],
+  Statut: ["EN_COURS", "TERMINEE", "EN_RETARD", "EN_PROLONGATION"],
+}
 
 function csvDate(value: string | null | undefined): string {
   if (!value) return ""
@@ -239,6 +271,7 @@ export default function LocationsPage() {
 
   const [importingCsv, setImportingCsv] = useState(false)
   const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportFormat, setExportFormat] = useState<"csv" | "xlsx">("csv")
   const [exportMode, setExportMode] = useState<"all" | "range">("all")
   const [exportStartDate, setExportStartDate] = useState("")
   const [exportEndDate, setExportEndDate] = useState("")
@@ -350,8 +383,7 @@ export default function LocationsPage() {
 
         statut: form.statut,
 
-        kmRetour:
-          form.statut === "TERMINEE" ? Number(form.kmRetour) : null,
+        kmRetour: form.statut === "TERMINEE" ? Number(form.kmRetour) : null,
 
         ...(prolongation &&
           prolongationConfirmed && {
@@ -457,69 +489,38 @@ export default function LocationsPage() {
   const downloadCsvTemplate = () => {
     downloadCsv("modele-import-locations.csv", [
       locationCsvHeaders,
-
-      [
-        "EXEMPLE - À remplacer",
-
-        "EXEMPLE",
-
-        "01/01/2026",
-
-        "02/01/2026",
-
-        1,
-
-        "TPE",
-
-        "EXEMPLE",
-
-        "01/01/2026",
-
-        30000,
-
-        "Oui",
-
-        "01/01/2026",
-
-        "COMM-001",
-
-        "Location professionnelle",
-
-        "Courte durée",
-
-        "EN_COURS",
-      ],
-      [
-        "HERTZ BENIN",
-        "AB 1234 RB",
-        "05/02/2026",
-        "08/02/2026",
-        3,
-        "Virement",
-        "FACT-2026-002",
-        "08/02/2026",
-        90000,
-        "Non",
-        "N/A",
-        "COMM-002",
-
-        "Déplacement professionnel",
-
-        "Longue durée",
-
-        "TERMINEE",
-      ],
+      ...locationCsvExamples,
     ])
   }
 
-  const exportLocationsCsv = () => {
-    if (exportMode === "range" && (!exportStartDate || !exportEndDate || exportStartDate > exportEndDate)) {
+  const downloadXlsxTemplate = () => {
+    void downloadXlsx(
+      "modele-import-locations.xlsx",
+      [locationCsvHeaders, ...locationCsvExamples],
+      { dropdowns: locationDropdowns },
+    ).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Modèle Excel impossible",
+      ),
+    )
+  }
+
+  const exportLocationsCsv = (format: "csv" | "xlsx" = "csv") => {
+    if (
+      exportMode === "range" &&
+      (!exportStartDate || !exportEndDate || exportStartDate > exportEndDate)
+    ) {
       setError("La période sélectionnée est invalide.")
       return
     }
-    const selectedRows = exportMode === "range"
-      ? rows.filter((location) => location.dateDebut.slice(0, 10) >= exportStartDate && location.dateDebut.slice(0, 10) <= exportEndDate)
-      : rows
+    const selectedRows =
+      exportMode === "range"
+        ? rows.filter(
+            (location) =>
+              location.dateDebut.slice(0, 10) >= exportStartDate &&
+              location.dateDebut.slice(0, 10) <= exportEndDate,
+          )
+        : rows
     const data = selectedRows.map((location) => [
       clients.find((client) => client.id === location.clientId)?.nom ?? "",
 
@@ -554,12 +555,41 @@ export default function LocationsPage() {
       location.statut,
     ])
 
-    const suffix = exportMode === "range" ? `-${exportStartDate}-au-${exportEndDate}` : ""
-    const title = exportMode === "range"
-      ? `LOCATIONS DU ${exportDate(exportStartDate)} AU ${exportDate(exportEndDate)}`
-      : "LOCATIONS"
+    const suffix =
+      exportMode === "range" ? `-${exportStartDate}-au-${exportEndDate}` : ""
+    const title =
+      exportMode === "range"
+        ? `LOCATIONS DU ${exportDate(exportStartDate)} AU ${exportDate(exportEndDate)}`
+        : "LOCATIONS"
     setExportModalOpen(false)
-    downloadCsv(`export-locations${suffix}.csv`, [[title], locationCsvHeaders, ...data])
+    if (format === "xlsx") {
+      const excelData = data.map((row, index) =>
+        row.map((value, column) =>
+          column === 9
+            ? selectedRows[index]?.paye == null
+              ? ""
+              : selectedRows[index].paye
+                ? "Oui"
+                : "Non"
+            : value,
+        ),
+      )
+      void downloadXlsx(
+        `export-locations${suffix}.xlsx`,
+        [[title], locationCsvHeaders, ...excelData],
+        { headerRow: 2, dropdowns: locationDropdowns },
+      ).catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Export Excel impossible",
+        ),
+      )
+    } else {
+      downloadCsv(`export-locations${suffix}.csv`, [
+        [title],
+        locationCsvHeaders,
+        ...data,
+      ])
+    }
   }
 
   const importLocationsCsv = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -574,7 +604,10 @@ export default function LocationsPage() {
     setError(null)
 
     try {
-      const result = await apiFetch<{ created: number }>(
+      const result = await apiFetch<{
+        created: number
+        clientsCreated: number
+      }>(
         "/api/locations/import-csv",
         {
           method: "POST",
@@ -585,8 +618,12 @@ export default function LocationsPage() {
 
       await load()
 
+      const clientMessage =
+        result.clientsCreated > 0
+          ? ` ${result.clientsCreated} nouveau(x) client(s) créé(s) automatiquement.`
+          : ""
       notifyDashboardMutation(
-        `Import terminé : ${result.created} location(s) enregistrée(s), avec les données de facturation et de paiement.`,
+        `Import terminé : ${result.created} location(s) enregistrée(s), avec les données de facturation et de paiement.${clientMessage}`,
       )
     } catch (e) {
       setError(e instanceof Error ? e.message : "Import CSV impossible")
@@ -610,23 +647,43 @@ export default function LocationsPage() {
         <button
           type="button"
           className="secondary vehicle-csv-button"
+          onClick={downloadXlsxTemplate}
+        >
+          Modèle Excel
+        </button>
+        <button
+          type="button"
+          className="secondary vehicle-csv-button"
           onClick={() => csvInput.current?.click()}
           disabled={importingCsv}
         >
-          {importingCsv ? "Import…" : "Importer CSV"}
+          {importingCsv ? "Import…" : "Importer CSV/Excel"}
         </button>
         <button
           type="button"
           className="primary small vehicle-csv-button"
-          onClick={() => setExportModalOpen(true)}
+          onClick={() => {
+            setExportFormat("csv")
+            setExportModalOpen(true)
+          }}
         >
           Exporter CSV
+        </button>
+        <button
+          type="button"
+          className="primary small vehicle-csv-button"
+          onClick={() => {
+            setExportFormat("xlsx")
+            setExportModalOpen(true)
+          }}
+        >
+          Exporter Excel
         </button>
         <input
           ref={csvInput}
           type="file"
-          accept=".csv,text/csv"
-          aria-label="Sélectionner un fichier CSV de locations"
+          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          aria-label="Sélectionner un fichier CSV ou Excel de locations"
           hidden
           onChange={(event) => void importLocationsCsv(event)}
         />
@@ -645,14 +702,75 @@ export default function LocationsPage() {
         </div>
         {exportModalOpen && (
           <div className="modal-backdrop">
-            <form className="modal" onSubmit={(event) => { event.preventDefault(); exportLocationsCsv() }}>
-              <button className="modal-close" type="button" onClick={() => setExportModalOpen(false)} aria-label="Fermer"><Icon name="close" /></button>
-              <p className="kicker">EXPORT DES LOCATIONS</p><h2>Choisir la période</h2>
+            <form
+              className="modal"
+              onSubmit={(event) => {
+                event.preventDefault()
+                exportLocationsCsv(exportFormat)
+              }}
+            >
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => setExportModalOpen(false)}
+                aria-label="Fermer"
+              >
+                <Icon name="close" />
+              </button>
+              <p className="kicker">EXPORT DES LOCATIONS</p>
+              <h2>Choisir la période</h2>
               <div className="modal-fields">
-                <label><span>Période</span><select value={exportMode} onChange={(event) => setExportMode(event.target.value as "all" | "range")}><option value="all">Toutes les locations</option><option value="range">Entre deux dates</option></select></label>
-                {exportMode === "range" && <><label><span>Date de début</span><input type="date" required value={exportStartDate} onChange={(event) => setExportStartDate(event.target.value)} /></label><label><span>Date de fin</span><input type="date" required value={exportEndDate} onChange={(event) => setExportEndDate(event.target.value)} /></label></>}
+                <label>
+                  <span>Période</span>
+                  <select
+                    value={exportMode}
+                    onChange={(event) =>
+                      setExportMode(event.target.value as "all" | "range")
+                    }
+                  >
+                    <option value="all">Toutes les locations</option>
+                    <option value="range">Entre deux dates</option>
+                  </select>
+                </label>
+                {exportMode === "range" && (
+                  <>
+                    <label>
+                      <span>Date de début</span>
+                      <input
+                        type="date"
+                        required
+                        value={exportStartDate}
+                        onChange={(event) =>
+                          setExportStartDate(event.target.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Date de fin</span>
+                      <input
+                        type="date"
+                        required
+                        value={exportEndDate}
+                        onChange={(event) =>
+                          setExportEndDate(event.target.value)
+                        }
+                      />
+                    </label>
+                  </>
+                )}
               </div>
-              <div className="modal-actions"><button type="button" className="secondary" onClick={() => setExportModalOpen(false)}>Annuler</button><button className="primary small">Exporter CSV</button></div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setExportModalOpen(false)}
+                >
+                  Annuler
+                </button>
+                <button className="primary small">
+                  Exporter {exportFormat === "xlsx" ? "Excel" : "CSV"}
+                </button>
+              </div>
             </form>
           </div>
         )}
@@ -810,7 +928,9 @@ export default function LocationsPage() {
                 <SearchableSelect
                   required
                   value={form.commercialId}
-                  onChange={(value) => setForm({ ...form, commercialId: value })}
+                  onChange={(value) =>
+                    setForm({ ...form, commercialId: value })
+                  }
                   options={commercials.map((item) => ({
                     value: String(item.id),
                     label: item.nom ?? String(item.id),

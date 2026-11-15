@@ -6,7 +6,7 @@ import DetailModal from "@/shared/components/DetailModal"
 
 import Icon from "@/shared/components/Icon"
 
-import { downloadCsv } from "@/shared/data/csv"
+import { downloadCsv, downloadXlsx } from "@/shared/data/csv"
 
 import TablePagination, { TABLE_PAGE_SIZE } from "../components/TablePagination"
 
@@ -205,6 +205,10 @@ const journalHeaders = [
   "Observation",
 ]
 
+const movementDropdowns = {
+  "Statut du paiement": ["non payee", "partielle", "payee", "impayee"],
+}
+
 function paddedJournalRow(
   values: Array<string | number>,
 ): Array<string | number> {
@@ -272,6 +276,8 @@ export default function MovementsPage() {
   const [exporting, setExporting] = useState(false)
 
   const [exportModalOpen, setExportModalOpen] = useState(false)
+
+  const [exportFormat, setExportFormat] = useState<"csv" | "xlsx">("csv")
 
   const [exportMode, setExportMode] = useState<"all" | "range">("all")
 
@@ -364,12 +370,10 @@ export default function MovementsPage() {
     }
   }
 
-  const exportJournal = async () => {
+  const exportJournal = async (format: "csv" | "xlsx" = "csv") => {
     if (
       exportMode === "range" &&
-      (!exportStartDate ||
-        !exportEndDate ||
-        exportStartDate > exportEndDate)
+      (!exportStartDate || !exportEndDate || exportStartDate > exportEndDate)
     ) {
       setError("La date de début doit précéder ou égaler la date de fin.")
       return
@@ -422,13 +426,13 @@ export default function MovementsPage() {
       const movementsByPassage = new Map<number, Movement[]>()
 
       for (const movement of movementRows) {
-      if (movement.passageId != null) {
-        const linked = movementsByPassage.get(movement.passageId) ?? []
-        linked.push(movement)
-        movementsByPassage.set(movement.passageId, linked)
-      }
+        if (movement.passageId != null) {
+          const linked = movementsByPassage.get(movement.passageId) ?? []
+          linked.push(movement)
+          movementsByPassage.set(movement.passageId, linked)
+        }
 
-      if (movement.locationId == null) continue
+        if (movement.locationId == null) continue
 
         const linked = movementsByLocation.get(movement.locationId) ?? []
 
@@ -749,11 +753,9 @@ export default function MovementsPage() {
       noteRow[18] = "Contraventions sur le véhicule à son retour"
 
       const filenamePeriod =
-        exportMode === "range"
-          ? `-${exportStartDate}-au-${exportEndDate}`
-          : ""
+        exportMode === "range" ? `-${exportStartDate}-au-${exportEndDate}` : ""
 
-      downloadCsv(`export-journal-mouvements${filenamePeriod}-${dateFile}.csv`, [
+      const journalRows = [
         dateRow,
 
         Array<string | number>(JOURNAL_COLUMN_COUNT).fill(""),
@@ -771,7 +773,19 @@ export default function MovementsPage() {
 
           return values
         }),
-      ])
+      ]
+      if (format === "xlsx") {
+        await downloadXlsx(
+          `export-journal-mouvements${filenamePeriod}-${dateFile}.xlsx`,
+          journalRows,
+          { headerRow: 5, dropdowns: movementDropdowns },
+        )
+      } else {
+        downloadCsv(
+          `export-journal-mouvements${filenamePeriod}-${dateFile}.csv`,
+          journalRows,
+        )
+      }
     } catch (e: unknown) {
       setError(
         e instanceof Error ? e.message : "Export des mouvements impossible",
@@ -816,11 +830,24 @@ export default function MovementsPage() {
             type="button"
             onClick={() => {
               setError(null)
+              setExportFormat("csv")
               setExportModalOpen(true)
             }}
             disabled={exporting}
           >
             {exporting ? "Préparation…" : "Exporter CSV"}
+          </button>
+          <button
+            className="primary small"
+            type="button"
+            onClick={() => {
+              setError(null)
+              setExportFormat("xlsx")
+              setExportModalOpen(true)
+            }}
+            disabled={exporting}
+          >
+            {exporting ? "Préparation…" : "Exporter Excel"}
           </button>
         </div>
       </div>
@@ -830,7 +857,7 @@ export default function MovementsPage() {
             className="modal"
             onSubmit={(event) => {
               event.preventDefault()
-              void exportJournal()
+              void exportJournal(exportFormat)
             }}
           >
             <button
@@ -841,7 +868,9 @@ export default function MovementsPage() {
             >
               <Icon name="close" />
             </button>
-            <p className="kicker">EXPORT DES MOUVEMENTS</p>
+            <p className="kicker">
+              EXPORT DES MOUVEMENTS · {exportFormat.toUpperCase()}
+            </p>
             <h2>Choisir la période</h2>
             <div className="modal-fields">
               <label>
@@ -863,7 +892,9 @@ export default function MovementsPage() {
                     <input
                       type="date"
                       value={exportStartDate}
-                      onChange={(event) => setExportStartDate(event.target.value)}
+                      onChange={(event) =>
+                        setExportStartDate(event.target.value)
+                      }
                       required
                     />
                   </label>
@@ -888,7 +919,7 @@ export default function MovementsPage() {
                 Annuler
               </button>
               <button className="primary small" type="submit">
-                Exporter CSV
+                Exporter {exportFormat === "xlsx" ? "Excel" : "CSV"}
               </button>
             </div>
           </form>

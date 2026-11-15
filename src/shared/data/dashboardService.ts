@@ -79,6 +79,8 @@ export interface CommercialFicheDto {
 
   email?: string | null
 
+  agenceId?: number | null
+
   agence?: string | null
 
   codeAgence?: string | null
@@ -409,6 +411,8 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
           "Chiffre d’affaires",
 
           "Performance",
+
+          "Agence d’appartenance",
         ],
 
         rows: rows.map((c) => [
@@ -421,6 +425,10 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
           formatMontant(c.chiffreAffaires),
 
           c.performance,
+
+          c.agence
+            ? `${c.agence}${c.codeAgence ? ` (${c.codeAgence})` : ""}`
+            : "—",
         ]),
 
         ids: rows.map((c) => c.id),
@@ -496,7 +504,7 @@ export async function fetchTable(module: TableModule): Promise<TableResult> {
 
       return {
         headers: [
-          "Client",
+          "Nom et prénoms",
 
           "Type",
 

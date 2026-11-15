@@ -22,6 +22,7 @@
     "migrate:admin-roles": "npm run db:migrate-admin-roles --prefix server"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "gsap": "^3.15.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

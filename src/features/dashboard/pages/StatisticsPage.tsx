@@ -92,6 +92,13 @@ interface BilanReport {
   revenueByCategory: Array<{ name: string; value: number }>
 }
 
+interface AgencyOption {
+  id: number
+  nom: string
+  code: string
+  actif: boolean
+}
+
 const SERIES = {
   red: "#D9534F",
   yellow: "#FFCC00",
@@ -213,6 +220,9 @@ function ReportCard({
 export default function StatisticsPage() {
   const [period, setPeriod] = useState<DatePeriod>("all")
   const [segment, setSegment] = useState("LCD")
+  const [agencyId, setAgencyId] = useState("")
+  const [agencies, setAgencies] = useState<AgencyOption[]>([])
+  const [agencyError, setAgencyError] = useState<string | null>(null)
   const [report, setReport] = useState<BilanReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -227,10 +237,29 @@ export default function StatisticsPage() {
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ segment })
+    if (agencyId) params.set("agenceId", agencyId)
     if (debut) params.set("debut", debut)
     if (fin) params.set("fin", fin)
     return params.toString()
-  }, [debut, fin, segment])
+  }, [agencyId, debut, fin, segment])
+
+  useEffect(() => {
+    let active = true
+    apiFetch<AgencyOption[]>("/api/parc/agences")
+      .then((result) => {
+        if (active) setAgencies(result)
+      })
+      .catch((cause: unknown) => {
+        if (active) {
+          setAgencyError(
+            cause instanceof Error ? cause.message : "Chargement des agences impossible",
+          )
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -282,6 +311,7 @@ export default function StatisticsPage() {
     }
 
     const params = new URLSearchParams({ segment })
+    if (agencyId) params.set("agenceId", agencyId)
     if (pdfStartDate && pdfEndDate) {
       params.set("debut", pdfStartDate)
       params.set("fin", pdfEndDate)
@@ -364,12 +394,30 @@ export default function StatisticsPage() {
             <option value="AUTRE">Autre</option>
             <option value="ALL">Tous les segments</option>
           </select>
+          <select
+            className="secondary status-filter"
+            aria-label="Agence"
+            value={agencyId}
+            onChange={(event) => setAgencyId(event.target.value)}
+          >
+            <option value="">Toutes les agences</option>
+            {agencies.map((agency) => (
+              <option key={agency.id} value={agency.id}>
+                {agency.nom} ({agency.code})
+              </option>
+            ))}
+          </select>
           <button className="primary small" type="button" onClick={exportPdf}>
             Imprimer le bilan PDF
           </button>
         </div>
       </section>
 
+      {agencyError && (
+        <p className="stats-inline-error">
+          Chargement des agences impossible : {agencyError}
+        </p>
+      )}
       {error && <p className="stats-inline-error">Actualisation impossible : {error}</p>}
       {report.warning && <div className="stats-warning" role="status">{report.warning}</div>}
 
@@ -693,7 +741,7 @@ export default function StatisticsPage() {
             <p className="stats-eyebrow">PARAMÈTRES DU RAPPORT</p>
             <h2 id="stats-pdf-period-title">Choisir la période du PDF</h2>
             <p className="stats-pdf-period-description">
-              Sélectionnez les dates à inclure. Laissez les deux champs vides pour utiliser la période par défaut du bilan.
+              Sélectionnez les dates à inclure. Laissez les deux champs vides pour utiliser la période par défaut du bilan. Le rapport conservera le segment et l’agence sélectionnés.
             </p>
             <div className="stats-pdf-date-fields">
               <label>

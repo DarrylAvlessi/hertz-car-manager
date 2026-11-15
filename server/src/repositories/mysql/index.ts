@@ -2342,7 +2342,7 @@ class MysqlClientRepo implements ClientRepo {
 
         input.type.toUpperCase(),
 
-        input.telephone,
+        input.telephone ?? "",
 
         input.email || null,
 
@@ -2375,7 +2375,7 @@ class MysqlClientRepo implements ClientRepo {
 
         input.type.toUpperCase(),
 
-        input.telephone,
+        input.telephone ?? "",
 
         input.email || null,
 

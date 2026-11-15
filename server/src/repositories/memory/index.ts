@@ -962,7 +962,7 @@ class MemoryClientRepo implements ClientRepo {
 
       type: input.type,
 
-      telephone: input.telephone,
+      telephone: input.telephone ?? "",
 
       email: input.email || null,
 
@@ -990,7 +990,7 @@ class MemoryClientRepo implements ClientRepo {
 
       type: input.type,
 
-      telephone: input.telephone,
+      telephone: input.telephone ?? "",
 
       email: input.email || null,
 

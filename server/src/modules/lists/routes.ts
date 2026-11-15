@@ -27,6 +27,7 @@ import {
   CsvParseError,
   normalizeCsvHeader,
   normalizeCsvLookup,
+  normalizeCsvName,
   parseCsvDocument,
 } from "../../lib/csv.js"
 
@@ -43,7 +44,9 @@ const clientSchema = z.object({
 
   prenom: z.string().trim().max(80).optional(),
 
-  type: z.enum(["Particulier", "Entreprise", "Organisation"]),
+  type: z
+    .enum(["Particulier", "Entreprise", "Organisation"])
+    .default("Particulier"),
 
   telephone: z.string().trim().max(30).optional(),
 
@@ -87,6 +90,15 @@ const reservationStatusSchema = z.object({
 const COMMERCIAL_CSV_HEADERS = [
   "PRENOM",
   "NOM",
+  "ABREVIATIONS",
+  "AGENCE",
+  "CODEAGENCE",
+  "TELEPHONE",
+  "EMAIL",
+]
+
+const COMMERCIAL_FULLNAME_CSV_HEADERS = [
+  "NOMETPRENOMS",
   "ABREVIATIONS",
   "AGENCE",
   "CODEAGENCE",
@@ -189,12 +201,21 @@ function parseLocationCsvAmount(value: string): number | null {
   return Number.isFinite(amount) ? amount : null
 }
 
+function clientNameKey(name: string): string {
+  return normalizeCsvName(name)
+}
+
+type ParsedLocationCsvRow = Omit<LocationInput, "clientId"> & {
+  clientId: number | null
+  clientName: string
+}
+
 function parseLocationCsv(
   csv: string,
   clients: Awaited<ReturnType<Repositories["clients"]["fiches"]>>,
   vehicles: Awaited<ReturnType<Repositories["vehicules"]["list"]>>,
   commercials: Awaited<ReturnType<Repositories["commerciaux"]["fiches"]>>,
-): LocationInput[] {
+): ParsedLocationCsvRow[] {
   let rows: string[][]
 
   try {
@@ -251,13 +272,6 @@ function parseLocationCsv(
   }
 
   const clientsByName = new Map<string, number>()
-  const clientNameKey = (name: string) =>
-    normalizeCsvLookup(name)
-      .replace(/[^A-Z0-9]+/g, " ")
-      .trim()
-      .split(/\s+/)
-      .sort()
-      .join(" ")
   const addClientName = (name: string, clientId: number) => {
     const key = clientNameKey(name)
     if (key) clientsByName.set(key, clientId)
@@ -288,7 +302,7 @@ function parseLocationCsv(
   }
 
   const errors: string[] = []
-  const inputs: LocationInput[] = []
+  const inputs: ParsedLocationCsvRow[] = []
   const importedVehicles = new Map<number, Array<{
     debut: string
     fin: string
@@ -339,7 +353,9 @@ function parseLocationCsv(
     const observation = get(values, "OBSERVATION")
 
     if (!clientName) rowErrors.push("nom du client obligatoire")
-    else if (!clientId) rowErrors.push(`client « ${clientName} » introuvable`)
+    else if (clientName.length > 150) {
+      rowErrors.push("nom du client limité à 150 caractères")
+    }
     if (!registration) rowErrors.push("immatriculation obligatoire")
     else if (!vehicle)
       rowErrors.push(`véhicule « ${registration} » introuvable`)
@@ -397,7 +413,8 @@ function parseLocationCsv(
     previous.push({ debut: start!, fin: end!, line })
     importedVehicles.set(vehicle!.id, previous)
     inputs.push({
-      clientId: clientId!,
+      clientId: clientId ?? null,
+      clientName,
       vehiculeId: vehicle!.id,
       commercialId,
       type: type!,
@@ -526,16 +543,13 @@ function parseReservationCsv(
 
   const clientByName = new Map<string, number>()
   for (const client of clients) {
-    clientByName.set(normalizeCsvLookup(client.nom), client.id)
-    if (client.prenom) {
-      clientByName.set(
-        normalizeCsvLookup(`${client.prenom} ${client.nom}`),
-        client.id,
-      )
-      clientByName.set(
-        normalizeCsvLookup(`${client.nom} ${client.prenom}`),
-        client.id,
-      )
+    const names = [client.nom]
+    if (client.prenom) names.push(`${client.prenom} ${client.nom}`)
+    if (client.prenom && client.nomFamille) {
+      names.push(`${client.prenom} ${client.nomFamille}`)
+    }
+    for (const name of names) {
+      clientByName.set(normalizeCsvName(name), client.id)
     }
   }
   const vehicleByPlate = new Map(
@@ -574,7 +588,7 @@ function parseReservationCsv(
       plate.replace(/[^a-z0-9]/gi, "").toUpperCase(),
     )
     const clientName = get(values, "Client")
-    const clientId = clientByName.get(normalizeCsvLookup(clientName))
+    const clientId = clientByName.get(normalizeCsvName(clientName))
     const commercialName = get(values, "Agent de vente")
     const commercialId = commercialByName.get(
       normalizeCsvLookup(commercialName),
@@ -625,6 +639,9 @@ function parseReservationCsv(
         `statut de réservation « ${rawReservationStatus} » non reconnu`,
       )
     }
+    if (clientName.length > 150) {
+      rowErrors.push("nom du client limité à 150 caractères")
+    }
     if (
       rawDuration &&
       (!/^\d+$/.test(rawDuration) || Number(rawDuration) < 0)
@@ -660,7 +677,7 @@ function parseReservationCsv(
       line,
       input: {
         clientId: clientId ?? null,
-        clientImport: clientName || null,
+        clientImport: clientId === undefined ? clientName || null : null,
         vehiculeId: vehicle!.id,
         commercialId: commercialId ?? null,
         commercialImport: commercialName || null,
@@ -706,14 +723,18 @@ function parseCommercialCsv(
   const headers = rows[0]?.map((header) =>
     normalizeCsvHeader(header.replace(/^\uFEFF/, "").trim()),
   )
+  const fullNameFormat =
+    headers?.length === COMMERCIAL_FULLNAME_CSV_HEADERS.length &&
+    headers.every(
+      (header, index) => header === COMMERCIAL_FULLNAME_CSV_HEADERS[index],
+    )
+  const legacyFormat =
+    headers?.length === COMMERCIAL_CSV_HEADERS.length &&
+    headers.every((header, index) => header === COMMERCIAL_CSV_HEADERS[index])
 
-  if (
-    !headers ||
-    headers.length !== COMMERCIAL_CSV_HEADERS.length ||
-    headers.some((header, index) => header !== COMMERCIAL_CSV_HEADERS[index])
-  ) {
+  if (!fullNameFormat && !legacyFormat) {
     throw badRequest(
-      "En-têtes CSV invalides. Colonnes attendues dans cet ordre : Prénom, NOM, Abréviations, Agence, Code Agence, Telephone, Email.",
+      "En-têtes CSV invalides. Utilisez le format « Nom et prénoms, Abréviations, Agence, Code Agence, Telephone, Email » ou un ancien modèle « Prénom, NOM, Abréviations, Agence, Code Agence, Telephone, Email ».",
     )
   }
 
@@ -732,7 +753,7 @@ function parseCommercialCsv(
 
   if (dataRows.length === 0) {
     throw badRequest(
-      "Le fichier ne contient aucun commercial à importer. Remplacez les lignes dont le prénom commence par « EXEMPLE ».",
+      "Le fichier ne contient aucun commercial à importer. Remplacez les lignes dont le nom commence par « EXEMPLE ».",
     )
   }
 
@@ -754,14 +775,19 @@ function parseCommercialCsv(
   const inputs: CommercialInput[] = []
 
   for (const { values, line } of dataRows) {
-    if (values.length !== COMMERCIAL_CSV_HEADERS.length) {
+    const expectedColumnCount = fullNameFormat
+      ? COMMERCIAL_FULLNAME_CSV_HEADERS.length
+      : COMMERCIAL_CSV_HEADERS.length
+    if (values.length !== expectedColumnCount) {
       errors.push(
-        `Ligne ${line} : ${COMMERCIAL_CSV_HEADERS.length} colonnes attendues, ${values.length} reçues.`,
+        `Ligne ${line} : ${expectedColumnCount} colonnes attendues, ${values.length} reçues.`,
       )
 
       continue
     }
 
+    const rowValues = values.map((value) => value.trim())
+    const commercialValues = fullNameFormat ? ["", ...rowValues] : rowValues
     const [
       prenom,
       nom,
@@ -770,15 +796,24 @@ function parseCommercialCsv(
       rawAgencyCode,
       telephone,
       email,
-    ] = values.map((value) => value.trim())
+    ] = commercialValues
 
     const rowErrors: string[] = []
 
-    if (!prenom) rowErrors.push("prénom manquant")
-    else if (prenom.length > 80) rowErrors.push("prénom limité à 80 caractères")
+    if (fullNameFormat) {
+      if (!nom) rowErrors.push("nom et prénoms manquants")
+      else if (nom.length > 80) {
+        rowErrors.push("nom et prénoms limités à 80 caractères")
+      }
+    } else {
+      if (!prenom) rowErrors.push("prénom manquant")
+      else if (prenom.length > 80) {
+        rowErrors.push("prénom limité à 80 caractères")
+      }
 
-    if (!nom) rowErrors.push("nom manquant")
-    else if (nom.length > 80) rowErrors.push("nom limité à 80 caractères")
+      if (!nom) rowErrors.push("nom manquant")
+      else if (nom.length > 80) rowErrors.push("nom limité à 80 caractères")
+    }
 
     if (!rawAbbreviation) rowErrors.push("abréviation manquante")
     else if (rawAbbreviation.length > 10)
@@ -826,7 +861,7 @@ function parseCommercialCsv(
     inputs.push({
       nom,
 
-      prenom,
+      prenom: prenom || undefined,
 
       abreviation: abbreviation,
       telephone: telephone || undefined,
@@ -1358,14 +1393,49 @@ export function listsRouter(repos: Repositories, env: Env): Router {
         )
       }
 
-      try {
-        const created = await repos.reservations.importMany(
-          rows.map(({ input }) => input),
+      const missingClients = new Map<string, string>()
+      for (const { input } of rows) {
+        if (input.clientId === null && input.clientImport) {
+          const key = normalizeCsvName(input.clientImport)
+          if (!missingClients.has(key)) {
+            missingClients.set(key, input.clientImport)
+          }
+        }
+      }
+
+      const createdClientIds = new Map<string, number>()
+      for (const [key, name] of missingClients) {
+        const client = await repos.clients.create(
+          {
+            nom: name,
+            type: "Particulier",
+            telephone: "",
+          },
+          req.user!.id,
         )
+        createdClientIds.set(key, client.id)
+      }
+
+      const reservationInputs = rows.map(({ input }) => {
+        if (input.clientId !== null || !input.clientImport) return input
+        const clientId = createdClientIds.get(
+          normalizeCsvName(input.clientImport),
+        )
+        if (clientId === undefined) {
+          throw new Error(
+            `Client « ${input.clientImport} » introuvable après création`,
+          )
+        }
+        return { ...input, clientId, clientImport: null }
+      })
+
+      try {
+        const created = await repos.reservations.importMany(reservationInputs)
         res.status(201).json({
           created,
-          unresolvedClients: rows.filter(
-            ({ input }) => input.clientId === null && input.clientImport,
+          clientsCreated: missingClients.size,
+          unresolvedClients: reservationInputs.filter(
+            (input) => input.clientId === null && input.clientImport,
           ).length,
           unresolvedCommercials: rows.filter(
             ({ input }) =>
@@ -1561,10 +1631,45 @@ export function listsRouter(repos: Repositories, env: Env): Router {
         )
       }
 
+      const missingClients = new Map<string, string>()
+      for (const input of inputs) {
+        if (input.clientId === null) {
+          const key = clientNameKey(input.clientName)
+          if (!missingClients.has(key)) {
+            missingClients.set(key, input.clientName)
+          }
+        }
+      }
+
+      const createdClientIds = new Map<string, number>()
+      for (const [key, name] of missingClients) {
+        const client = await repos.clients.create(
+          {
+            nom: name,
+            type: "Particulier",
+            telephone: "",
+          },
+          req.user!.id,
+        )
+        createdClientIds.set(key, client.id)
+      }
+
       const created = []
       for (const input of inputs) {
+        const { clientName, ...locationInput } = input
+        const clientId =
+          input.clientId ?? createdClientIds.get(clientNameKey(clientName))
+        if (clientId === undefined) {
+          throw new Error(`Client « ${clientName} » introuvable après création`)
+        }
+
         try {
-          created.push(await repos.locations.create(input, req.user!.id))
+          created.push(
+            await repos.locations.create(
+              { ...locationInput, clientId },
+              req.user!.id,
+            ),
+          )
         } catch (error) {
           if (error instanceof AvailabilityConflictError) {
             throw conflict(`Import interrompu : ${error.message}`)
@@ -1573,7 +1678,9 @@ export function listsRouter(repos: Repositories, env: Env): Router {
         }
       }
 
-      res.status(201).json({ created: created.length })
+      res
+        .status(201)
+        .json({ created: created.length, clientsCreated: missingClients.size })
     }),
   )
 

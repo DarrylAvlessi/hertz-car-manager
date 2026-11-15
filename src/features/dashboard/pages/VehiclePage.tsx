@@ -11,7 +11,7 @@ import SearchableSelect from "@/shared/components/SearchableSelect"
 
 import { apiFetch } from "@/shared/api/client"
 import { notifyDashboardMutation } from "@/shared/components/dashboardNotifications"
-import { downloadCsv } from "@/shared/data/csv"
+import { downloadCsv, downloadXlsx, readCsvFile } from "@/shared/data/csv"
 import { canUseVehicleForNewOperation } from "@/shared/data/vehicleStatus"
 
 import type { DashboardOutletContext } from "../DashboardLayout"
@@ -52,12 +52,7 @@ interface CommercialOption {
   nom: string
 }
 
-type GaragePassageType =
-  | "REPARATION"
-  | "REVISION"
-  | "ENTRETIEN"
-  | "VISITE_TECHNIQUE"
-  | "AUTRE"
+type GaragePassageType = "REPARATION" | "REVISION" | "ENTRETIEN" | "VISITE_TECHNIQUE" | "AUTRE"
 
 interface Vehicle {
   id: number
@@ -128,6 +123,16 @@ const vehicleCsvExamples: Array<Array<string | number>> = [
   ],
 ]
 
+const vehicleDropdowns = {
+  Carburation: [
+    "ES (Essence)",
+    "GO (Gazole)",
+    "HYBRIDE",
+    "ELECTRIQUE",
+    "Indéfini",
+  ],
+}
+
 function csvDate(value?: string | null): string {
   if (!value) return ""
   const [year, month, day] = value.slice(0, 10).split("-")
@@ -148,7 +153,10 @@ const vehicleStatuses = [
 const changeableVehicleStatuses = vehicleStatuses.filter(
   (status) => status !== "SORTIE_DEFINITIVE",
 )
-const garagePassageTypes: Array<{ value: GaragePassageType; label: string }> = [
+const garagePassageTypes: Array<{
+  value: GaragePassageType
+  label: string
+}> = [
   { value: "REPARATION", label: "Réparation" },
   { value: "REVISION", label: "Révision" },
   { value: "ENTRETIEN", label: "Entretien" },
@@ -390,7 +398,19 @@ export default function VehiclePage() {
     ])
   }
 
-  const exportVehiclesCsv = () => {
+  const downloadXlsxTemplate = () => {
+    void downloadXlsx(
+      "modele-import-vehicules.xlsx",
+      [vehicleCsvHeaders, ...vehicleCsvExamples],
+      { dropdowns: vehicleDropdowns },
+    ).catch((cause: unknown) =>
+      setError(
+        cause instanceof Error ? cause.message : "Modèle Excel impossible",
+      ),
+    )
+  }
+
+  const exportVehiclesCsv = (format: "csv" | "xlsx" = "csv") => {
     const data = rows.map((vehicle) => {
       const fuel =
         vehicle.carburant === "ESSENCE"
@@ -416,7 +436,17 @@ export default function VehiclePage() {
         csvDate(vehicle.dateExpirationAssurance),
       ]
     })
-    downloadCsv("export-vehicules.csv", [vehicleCsvHeaders, ...data])
+    if (format === "xlsx") {
+      void downloadXlsx("export-vehicules.xlsx", [vehicleCsvHeaders, ...data], {
+        dropdowns: vehicleDropdowns,
+      }).catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Export Excel impossible",
+        ),
+      )
+    } else {
+      downloadCsv("export-vehicules.csv", [vehicleCsvHeaders, ...data])
+    }
   }
 
   const importVehiclesCsv = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -430,7 +460,7 @@ export default function VehiclePage() {
         "/api/vehicules/import-csv",
         {
           method: "POST",
-          body: { csv: await file.text() },
+          body: { csv: await readCsvFile(file) },
         },
       )
       await load()
@@ -465,23 +495,37 @@ export default function VehiclePage() {
           <button
             type="button"
             className="secondary vehicle-csv-button"
+            onClick={downloadXlsxTemplate}
+          >
+            Modèle Excel
+          </button>
+          <button
+            type="button"
+            className="secondary vehicle-csv-button"
             onClick={() => csvInput.current?.click()}
             disabled={importingCsv}
           >
-            {importingCsv ? "Import…" : "Importer CSV"}
+            {importingCsv ? "Import…" : "Importer CSV/Excel"}
           </button>
           <button
             type="button"
             className="primary small vehicle-csv-button"
-            onClick={exportVehiclesCsv}
+            onClick={() => exportVehiclesCsv()}
           >
             Exporter CSV
+          </button>
+          <button
+            type="button"
+            className="primary small vehicle-csv-button"
+            onClick={() => exportVehiclesCsv("xlsx")}
+          >
+            Exporter Excel
           </button>
           <input
             ref={csvInput}
             type="file"
-            accept=".csv,text/csv"
-            aria-label="Sélectionner un fichier CSV de véhicules"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            aria-label="Sélectionner un fichier CSV ou Excel de véhicules"
             hidden
             onChange={(event) => void importVehiclesCsv(event)}
           />
@@ -789,7 +833,9 @@ function StatusModal({
   const [statutConfirmation, setStatutConfirmation] = useState("")
   const [statutFacturation, setStatutFacturation] = useState("NON_FACTUREE")
   const [statutPaiement, setStatutPaiement] = useState("NON_PAYEE")
-  const [garages, setGarages] = useState<Array<{ id: number; nom: string }>>([])
+  const [garages, setGarages] = useState<
+    Array<{ id: number; nom: string }>
+  >([])
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   useEffect(() => {
@@ -826,24 +872,25 @@ function StatusModal({
           body: {
             statut: status,
             observation: observation.trim() || undefined,
-            kilometrageDepart:
-              ["MISE_EN_LOCATION", "ENVOI_GARAGE", "SORTIE_INTERNE"].includes(
-                status,
-              )
-                ? Number(kilometrage)
-                : undefined,
-            kilometrageRetour:
-              ["RETOUR_LOCATION", "RETOUR_GARAGE", "RETOUR_INTERNE"].includes(
-                status,
-              )
-                ? Number(kilometrage)
-                : undefined,
+            kilometrageDepart: [
+              "MISE_EN_LOCATION",
+              "ENVOI_GARAGE",
+              "SORTIE_INTERNE",
+            ].includes(status)
+              ? Number(kilometrage)
+              : undefined,
+            kilometrageRetour: [
+              "RETOUR_LOCATION",
+              "RETOUR_GARAGE",
+              "RETOUR_INTERNE",
+            ].includes(status)
+              ? Number(kilometrage)
+              : undefined,
             garageId:
               status === "ENVOI_GARAGE" && garageId
                 ? Number(garageId)
                 : undefined,
-            typePassage:
-              status === "ENVOI_GARAGE" ? typePassage : undefined,
+            typePassage: status === "ENVOI_GARAGE" ? typePassage : undefined,
             motif:
               status === "ENVOI_GARAGE"
                 ? observation.trim() || null
@@ -908,7 +955,12 @@ function StatusModal({
                   key={value}
                   value={value}
                   disabled={
-                    ["MISE_EN_LOCATION", "ENVOI_GARAGE", "SORTIE_INTERNE", "RESERVATION"].includes(value) &&
+                    [
+                      "MISE_EN_LOCATION",
+                      "ENVOI_GARAGE",
+                      "SORTIE_INTERNE",
+                      "RESERVATION",
+                    ].includes(value) &&
                     !canUseVehicleForNewOperation(vehicle.statut)
                   }
                 >
@@ -918,8 +970,8 @@ function StatusModal({
             </select>
             <small>
               Location, garage, sortie interne et réservation : disponibles
-              uniquement depuis un statut d’entrée ou de retour. La vente suit la
-              même règle.
+              uniquement depuis un statut d’entrée ou de retour. La vente suit
+              la même règle.
             </small>
           </label>
           {[
@@ -1598,7 +1650,7 @@ function SaleModal({
             <label>
               <span>Date et heure de vente *</span>
               <input
-              type="datetime-local"
+                type="datetime-local"
                 required
                 value={form.dateVente}
                 onChange={(event) => set("dateVente", event.target.value)}

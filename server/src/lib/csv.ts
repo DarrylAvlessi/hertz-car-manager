@@ -98,6 +98,15 @@ export function normalizeCsvLookup(value: string): string {
     .toUpperCase()
 }
 
+export function normalizeCsvName(value: string): string {
+  return normalizeCsvLookup(value)
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .sort()
+    .join(" ")
+}
+
 export function normalizeCsvHeader(value: string): string {
   return normalizeCsvLookup(value).replace(/[^A-Z0-9]/g, "")
 }
