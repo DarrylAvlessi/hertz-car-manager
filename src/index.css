@@ -897,6 +897,37 @@ td strong { color: #111; }
 .modal h2 { margin: 0; font-size: 28px; }
 .modal > p:nth-of-type(2) { color: #777; font-size: 11px; }
 .modal-fields { margin: 28px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 25px 20px; }
+.location-import-choices { align-items: start; }
+.location-import-choice {
+  min-width: 0;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid #ddd;
+}
+.location-import-choice legend {
+  padding: 0 6px;
+  color: #222;
+  font-size: 16px;
+  font-weight: 600;
+}
+.location-import-choice-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  color: #333;
+  font-size: 14px;
+  cursor: pointer;
+}
+.modal .location-import-choice-option input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+  padding: 0;
+  border: initial;
+  accent-color: #111;
+}
 .modal select { background: white; }
 .searchable-select { position: relative; width: 100%; }
 .searchable-select--open { z-index: 80; }
@@ -1173,6 +1204,12 @@ td strong { color: #111; }
   max-height: calc(100dvh - 40px);
   overflow-y: auto;
 }
+.modal.sub-location-vehicle-modal {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+}
 .vehicle-csv-actions {
   display: flex;
   flex: none;
@@ -1193,6 +1230,45 @@ td strong { color: #111; }
 .locations-page-heading .locations-csv-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+.locations-toolbar {
+  align-items: center;
+  gap: 20px;
+}
+.locations-toolbar > div:first-child {
+  flex: 0 0 180px;
+  min-width: 0;
+}
+.locations-toolbar > div:last-child {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) repeat(4, minmax(105px, 1fr)) auto;
+  gap: 9px;
+}
+.locations-toolbar .table-search {
+  width: 100%;
+  min-width: 0;
+}
+.locations-toolbar .status-filter {
+  width: 100%;
+  min-width: 0;
+}
+.locations-toolbar .primary {
+  white-space: nowrap;
+}
+@media (max-width: 1280px) {
+  .locations-toolbar {
+    align-items: start;
+    flex-wrap: wrap;
+  }
+  .locations-toolbar > div:first-child {
+    flex-basis: 100%;
+  }
+  .locations-toolbar > div:last-child {
+    flex-basis: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
 }
 .reservation-page-heading {
   align-items: center;

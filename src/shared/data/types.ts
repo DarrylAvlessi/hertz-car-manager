@@ -1,6 +1,6 @@
-export type DashboardModule = "Vue d’ensemble" | "Commerciaux" | "Parc automobile" | "Catégories véhicules" | "Modèle véhicule" | "Agences" | "Centres" | "Garages" | "Passages garage" | "Réparations" | "Véhicules" | "Mouvements véhicules" | "Ventes de véhicules" | "Réparations" | "Locations" | "Prolongations" | "Réservations" | "Contraventions" | "Clients" | "Conducteurs" | "Statistiques" | "Administrateurs"
+export type DashboardModule = "Vue d’ensemble" | "Commerciaux" | "Parc automobile" | "Catégories véhicules" | "Modèle véhicule" | "Agences" | "Centres" | "Garages" | "Passages garage" | "Réparations" | "Véhicules" | "Véhicules de sous-location" | "Mouvements véhicules" | "Ventes de véhicules" | "Réparations" | "Locations" | "Prolongations" | "Réservations" | "Contraventions" | "Clients" | "Conducteurs" | "Statistiques" | "Administrateurs"
 
-export type TableModule = Exclude<DashboardModule, "Vue d’ensemble" | "Statistiques" | "Administrateurs" | "Parc automobile" | "Catégories véhicules" | "Modèle véhicule" | "Agences" | "Centres" | "Garages" | "Passages garage" | "Réparations" | "Mouvements véhicules" | "Ventes de véhicules" | "Prolongations" | "Conducteurs">
+export type TableModule = Exclude<DashboardModule, "Vue d’ensemble" | "Statistiques" | "Administrateurs" | "Parc automobile" | "Catégories véhicules" | "Modèle véhicule" | "Agences" | "Centres" | "Garages" | "Passages garage" | "Réparations" | "Véhicules de sous-location" | "Mouvements véhicules" | "Ventes de véhicules" | "Prolongations" | "Conducteurs">
 
 export interface TableData {
   headers: string[]

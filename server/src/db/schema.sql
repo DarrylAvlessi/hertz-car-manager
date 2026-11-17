@@ -367,6 +367,85 @@ CREATE TABLE IF NOT EXISTS location (
   INDEX idx_loc_statut (statut)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS vehicule_sous_location (
+  id_vehicule_sous_location INT AUTO_INCREMENT PRIMARY KEY,
+  immatriculation VARCHAR(30) NOT NULL,
+  immatriculation_normalisee VARCHAR(30) GENERATED ALWAYS AS
+    (UPPER(REPLACE(REPLACE(immatriculation, ' ', ''), '-', ''))) STORED,
+  marque VARCHAR(60) NULL,
+  modele VARCHAR(80) NULL,
+  version VARCHAR(60) NULL,
+  annee SMALLINT NULL,
+  numero_chassis VARCHAR(40) NULL UNIQUE,
+  couleur VARCHAR(30) NULL,
+  carburant ENUM('ESSENCE','DIESEL','HYBRIDE','ELECTRIQUE') NULL,
+  nb_places TINYINT UNSIGNED NULL,
+  kilometrage INT NOT NULL DEFAULT 0 CHECK (kilometrage >= 0),
+  segment_parc ENUM('LCD','LLD','LEASING','IMPRO','AUTRE') NOT NULL DEFAULT 'LCD',
+  groupe_geolocalisation VARCHAR(80) NULL,
+  id_centre INT NULL,
+  date_mise_en_service DATE NULL,
+  date_entree_parc DATE NULL,
+  date_sortie_parc DATE NULL,
+  prix_achat DECIMAL(14,2) NULL CHECK (prix_achat IS NULL OR prix_achat >= 0),
+  date_achat DATE NULL,
+  prix_vente DECIMAL(14,2) NULL CHECK (prix_vente IS NULL OR prix_vente >= 0),
+  statut ENUM('ENTREE_PARC','MISE_EN_LOCATION','RETOUR_LOCATION','SORTIE_INTERNE','RETOUR_INTERNE',
+              'ENVOI_GARAGE','RETOUR_GARAGE','SORTIE_DEFINITIVE','RESERVATION') NOT NULL DEFAULT 'ENTREE_PARC',
+  date_prochaine_visite_technique DATE NULL,
+  date_expiration_assurance DATE NULL,
+  observation VARCHAR(255) NULL,
+  id_categorie INT NULL,
+  id_administrateur INT NOT NULL,
+  cree_le TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_sous_location_vehicule_immat (immatriculation_normalisee),
+  CONSTRAINT fk_sous_vehicule_modele FOREIGN KEY (marque, modele)
+    REFERENCES modele_vehicule(marque, nom) ON UPDATE CASCADE,
+  CONSTRAINT fk_sous_vehicule_categorie FOREIGN KEY (id_categorie)
+    REFERENCES categorie_vehicule(id_categorie),
+  CONSTRAINT fk_sous_vehicule_centre FOREIGN KEY (id_centre)
+    REFERENCES centre(id_centre) ON DELETE SET NULL,
+  CONSTRAINT fk_sous_vehicule_admin FOREIGN KEY (id_administrateur)
+    REFERENCES administrateur(id_administrateur),
+  INDEX idx_sous_vehicule_statut (statut),
+  INDEX idx_sous_vehicule_immat (immatriculation)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS sous_location (
+  id_sous_location INT AUTO_INCREMENT PRIMARY KEY,
+  numero_contrat VARCHAR(30) NULL UNIQUE,
+  type_location ENUM('COURTE_DUREE','LONGUE_DUREE') NOT NULL,
+  date_debut DATETIME NOT NULL,
+  date_fin_prevue DATETIME NOT NULL,
+  montant_total DECIMAL(14,2) NOT NULL DEFAULT 0 CHECK (montant_total >= 0),
+  statut ENUM('EN_COURS','TERMINEE','EN_RETARD','EN_PROLONGATION') NOT NULL DEFAULT 'EN_COURS',
+  statut_paiement ENUM('NON_PAYEE','PARTIELLE','PAYEE') NOT NULL DEFAULT 'NON_PAYEE',
+  observation VARCHAR(255) NULL,
+  mode_paiement_import VARCHAR(80) NULL,
+  reference_facture_import VARCHAR(30) NULL,
+  date_facturation_import DATE NULL,
+  date_paiement_import DATE NULL,
+  paye_import VARCHAR(10) NULL,
+  date_retour_reelle DATETIME NULL,
+  id_client INT NOT NULL,
+  id_vehicule_sous_location INT NOT NULL,
+  id_commercial INT NULL,
+  id_administrateur INT NOT NULL,
+  CONSTRAINT fk_sous_location_client FOREIGN KEY (id_client)
+    REFERENCES client(id_client),
+  CONSTRAINT fk_sous_location_vehicule FOREIGN KEY (id_vehicule_sous_location)
+    REFERENCES vehicule_sous_location(id_vehicule_sous_location),
+  CONSTRAINT fk_sous_location_commercial FOREIGN KEY (id_commercial)
+    REFERENCES commercial(id_commercial) ON DELETE SET NULL,
+  CONSTRAINT fk_sous_location_admin FOREIGN KEY (id_administrateur)
+    REFERENCES administrateur(id_administrateur),
+  CONSTRAINT ck_sous_location_dates CHECK (date_fin_prevue > date_debut),
+  INDEX idx_sous_location_vehicle_dates
+    (id_vehicule_sous_location, date_debut, date_fin_prevue),
+  INDEX idx_sous_location_client (id_client),
+  INDEX idx_sous_location_status (statut)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS location_courte_duree (
   id_location               INT PRIMARY KEY,           -- PK + FK vers location
   nb_jours                  INT NOT NULL CHECK (nb_jours > 0),
@@ -559,13 +638,15 @@ CREATE TABLE IF NOT EXISTS mouvement_vehicule (
   kilometrage           INT NULL CHECK (kilometrage IS NULL OR kilometrage >= 0),
   observation           VARCHAR(255) NULL,
   contravention_constatee BOOLEAN NULL,                  -- « Contraventions commises » vérifiées au retour
-  id_vehicule           INT NOT NULL,
+  id_vehicule           INT NULL,
+  id_vehicule_sous_location INT NULL,
   id_lieu               INT NULL,                        -- lieu de départ ou de retour
   id_conducteur         INT NULL,                        -- « UTILISATEUR / CONDUCTEUR »
   id_commercial         INT NULL,                        -- « Agent de vente »
   id_validateur         INT NULL,                        -- « VALIDATEUR »
   id_mouvement_depart   INT NULL UNIQUE,                 -- sur un retour : le départ correspondant
   id_location           INT NULL,
+  id_sous_location      INT NULL,
   id_passage            INT NULL,
   CONSTRAINT fk_mvt_vehicule   FOREIGN KEY (id_vehicule)         REFERENCES vehicule(id_vehicule),
   CONSTRAINT fk_mvt_lieu       FOREIGN KEY (id_lieu)             REFERENCES lieu(id_lieu),
@@ -574,10 +655,20 @@ CREATE TABLE IF NOT EXISTS mouvement_vehicule (
   CONSTRAINT fk_mvt_validateur FOREIGN KEY (id_validateur)       REFERENCES commercial(id_commercial) ON DELETE SET NULL,
   CONSTRAINT fk_mvt_depart     FOREIGN KEY (id_mouvement_depart) REFERENCES mouvement_vehicule(id_mouvement),
   CONSTRAINT fk_mvt_location   FOREIGN KEY (id_location)         REFERENCES location(id_location) ON DELETE SET NULL,
+  CONSTRAINT fk_mvt_sous_vehicule FOREIGN KEY (id_vehicule_sous_location)
+    REFERENCES vehicule_sous_location(id_vehicule_sous_location),
+  CONSTRAINT fk_mvt_sous_location FOREIGN KEY (id_sous_location)
+    REFERENCES sous_location(id_sous_location) ON DELETE CASCADE,
   CONSTRAINT fk_mvt_passage    FOREIGN KEY (id_passage)          REFERENCES passage_garage(id_passage),
+  CONSTRAINT ck_mvt_vehicle_ref CHECK (
+    (id_vehicule IS NOT NULL AND id_vehicule_sous_location IS NULL) OR
+    (id_vehicule IS NULL AND id_vehicule_sous_location IS NOT NULL)
+  ),
   INDEX idx_mvt_vehicule_date (id_vehicule, date_mouvement),
+  INDEX idx_mvt_sous_vehicule_date (id_vehicule_sous_location, date_mouvement),
   INDEX idx_mvt_type (type_mouvement),
   INDEX idx_mvt_location (id_location),
+  INDEX idx_mvt_sous_location (id_sous_location),
   INDEX idx_mvt_passage (id_passage)
 ) ENGINE=InnoDB;
 

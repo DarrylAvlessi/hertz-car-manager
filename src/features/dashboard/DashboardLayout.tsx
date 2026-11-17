@@ -84,6 +84,8 @@ const FLEET_NAV = [
 
   { label: "Véhicules", to: ROUTES.vehicules },
 
+  { label: "Véhicules de sous-location", to: ROUTES.vehiculesSousLocation },
+
   { label: "Mouvements véhicules", to: ROUTES.mouvementsVehicules },
 
   { label: "Ventes de véhicules", to: ROUTES.ventesVehicules },
@@ -416,6 +418,8 @@ export default function DashboardLayout() {
     "Passages garage",
 
     "Réparations",
+
+    "Véhicules de sous-location",
 
     "Mouvements véhicules",
 

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { existsSync } from "node:fs"
 import path from "node:path"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -44,9 +45,16 @@ export async function generateBilanPdf(
   reportData?: object,
 ): Promise<Buffer> {
   const pythonExec = await resolvePython()
-  const scriptPath = path.resolve(__dirname, "generateur_bilan.py")
-  const fontsPath = path.resolve(__dirname, "fonts")
-  const logoPath = path.resolve(__dirname, "assets/logo.png")
+  const sourcePdfDirectory = path.resolve(
+    __dirname,
+    "../../../src/modules/pdf",
+  )
+  const pdfDirectory = existsSync(path.resolve(__dirname, "generateur_bilan.py"))
+    ? __dirname
+    : sourcePdfDirectory
+  const scriptPath = path.resolve(pdfDirectory, "generateur_bilan.py")
+  const fontsPath = path.resolve(pdfDirectory, "fonts")
+  const logoPath = path.resolve(pdfDirectory, "assets/logo.png")
 
   const tempPdfPath = path.join(
     os.tmpdir(),

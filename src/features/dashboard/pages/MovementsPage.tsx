@@ -20,9 +20,15 @@ type MovementType = "ENTREE_PARC" | "MISE_EN_LOCATION" | "RETOUR_LOCATION" | "SO
 interface Movement {
   id: number
 
-  vehiculeId: number
+  vehiculeId: number | null
 
-  kmDepart: number
+  vehiculeSousLocationId?: number | null
+
+  sousLocationId?: number | null
+
+  immatriculation?: string | null
+
+  kmDepart?: number | null
 
   kmRetour: number | null
 
@@ -68,7 +74,15 @@ interface RentalExportRow {
 
   clientId: number | null
 
-  vehiculeId: number
+  vehiculeId: number | null
+
+  vehiculeSousLocationId?: number | null
+
+  sousLocationId?: number
+
+  isSousLocation?: boolean
+
+  immatriculation?: string
 
   commercialId: number | null
 
@@ -270,6 +284,9 @@ export default function MovementsPage() {
   const [rows, setRows] = useState<Movement[]>([])
 
   const [vehicles, setVehicles] = useState<VehicleOption[]>([])
+  const [sousLocationVehicles, setSousLocationVehicles] = useState<
+    VehicleOption[]
+  >([])
 
   const [error, setError] = useState<string | null>(null)
 
@@ -299,15 +316,19 @@ export default function MovementsPage() {
 
   const load = async () => {
     try {
-      const [movementRows, vehicleRows] = await Promise.all([
-        apiFetch<Movement[]>("/api/mouvements"),
+      const [movementRows, vehicleRows, sousLocationVehicleRows] =
+        await Promise.all([
+          apiFetch<Movement[]>("/api/mouvements"),
 
-        apiFetch<VehicleOption[]>("/api/vehicules"),
-      ])
+          apiFetch<VehicleOption[]>("/api/vehicules"),
+
+          apiFetch<VehicleOption[]>("/api/sous-locations/vehicules"),
+        ])
 
       setRows(movementRows)
 
       setVehicles(vehicleRows)
+      setSousLocationVehicles(sousLocationVehicleRows)
 
       setError(null)
     } catch (e: unknown) {
@@ -331,11 +352,11 @@ export default function MovementsPage() {
         (!typeFilter || row.type === typeFilter) &&
         matchesDatePeriod(row.date, datePeriod) &&
         (!needle ||
-          `${vehicles.find((vehicle) => vehicle.id === row.vehiculeId)?.immatriculation ?? row.vehiculeId} ${row.type} ${row.motif ?? ""} ${row.commentaire ?? ""}`
+          `${row.immatriculation ?? [...vehicles, ...sousLocationVehicles].find((vehicle) => vehicle.id === (row.vehiculeId ?? row.vehiculeSousLocationId))?.immatriculation ?? ""} ${row.type} ${row.motif ?? ""} ${row.commentaire ?? ""}`
             .toLowerCase()
             .includes(needle)),
     )
-  }, [rows, vehicles, typeFilter, query, datePeriod])
+  }, [rows, vehicles, sousLocationVehicles, typeFilter, query, datePeriod])
 
   const visibleRows = useMemo(
     () =>
@@ -390,6 +411,7 @@ export default function MovementsPage() {
         garagePassages,
         sales,
         vehicleRows,
+        sousLocationVehicleRows,
         clients,
         commercials,
         movementRows,
@@ -402,6 +424,8 @@ export default function MovementsPage() {
 
         apiFetch<VehicleOption[]>("/api/vehicules"),
 
+        apiFetch<VehicleOption[]>("/api/sous-locations/vehicules"),
+
         apiFetch<NamedOption[]>("/api/clients"),
 
         apiFetch<NamedOption[]>("/api/commerciaux"),
@@ -413,6 +437,10 @@ export default function MovementsPage() {
         vehicleRows.map((vehicle) => [vehicle.id, vehicle]),
       )
 
+      const sousLocationVehicleById = new Map(
+        sousLocationVehicleRows.map((vehicle) => [vehicle.id, vehicle]),
+      )
+
       const clientById = new Map(
         clients.map((client) => [client.id, client.nom]),
       )
@@ -422,6 +450,8 @@ export default function MovementsPage() {
       )
 
       const movementsByLocation = new Map<number, Movement[]>()
+
+      const movementsBySousLocation = new Map<number, Movement[]>()
 
       const movementsByPassage = new Map<number, Movement[]>()
 
@@ -440,23 +470,43 @@ export default function MovementsPage() {
 
         movementsByLocation.set(movement.locationId, linked)
       }
+      for (const movement of movementRows) {
+        if (movement.sousLocationId == null) continue
+        const linked = movementsBySousLocation.get(movement.sousLocationId) ?? []
+        linked.push(movement)
+        movementsBySousLocation.set(movement.sousLocationId, linked)
+      }
 
       const exportRows: Array<{
         sortDate: string
         values: Array<string | number>
       }> = []
 
-      const vehicleName = (id: number) => {
-        const vehicle = vehicleById.get(id)
+      const vehicleName = (
+        id: number | null,
+        immatriculation?: string,
+        sousLocationVehicleId?: number | null,
+      ) => {
+        const vehicle =
+          id == null && sousLocationVehicleId != null
+            ? sousLocationVehicleById.get(sousLocationVehicleId)
+            : id == null
+              ? undefined
+              : vehicleById.get(id)
 
         return (
-          vehicle?.marqueModele ??
-          [vehicle?.marque, vehicle?.modele].filter(Boolean).join(" ")
+          vehicle?.marqueModele ||
+          [vehicle?.marque, vehicle?.modele].filter(Boolean).join(" ") ||
+          immatriculation ||
+          ""
         )
       }
 
       for (const rental of rentals) {
-        const linkedMovements = movementsByLocation.get(rental.id) ?? []
+        const linkedMovements =
+          rental.isSousLocation && rental.sousLocationId != null
+            ? movementsBySousLocation.get(rental.sousLocationId) ?? []
+            : movementsByLocation.get(rental.id) ?? []
 
         const departure = linkedMovements.find(
           (movement) => movement.type === "MISE_EN_LOCATION",
@@ -494,8 +544,15 @@ export default function MovementsPage() {
 
           values: paddedJournalRow([
             0,
-            vehicleById.get(rental.vehiculeId)?.immatriculation ?? "",
-            vehicleName(rental.vehiculeId),
+            rental.immatriculation ??
+              (rental.vehiculeId == null
+                ? ""
+                : vehicleById.get(rental.vehiculeId)?.immatriculation ?? ""),
+            vehicleName(
+              rental.vehiculeId,
+              rental.immatriculation,
+              rental.isSousLocation ? rental.vehiculeSousLocationId : null,
+            ),
 
             departureDate.date,
             departureDate.time,
@@ -554,8 +611,15 @@ export default function MovementsPage() {
 
           values: paddedJournalRow([
             0,
-            vehicleById.get(movement.vehiculeId)?.immatriculation ?? "",
-            vehicleName(movement.vehiculeId),
+            movement.immatriculation ??
+              (movement.vehiculeId == null
+                ? ""
+                : vehicleById.get(movement.vehiculeId)?.immatriculation ?? ""),
+            vehicleName(
+              movement.vehiculeId,
+              movement.immatriculation ?? undefined,
+              movement.vehiculeSousLocationId,
+            ),
 
             departureDate.date,
             departureDate.time,
@@ -946,8 +1010,18 @@ export default function MovementsPage() {
               <tr key={row.id}>
                 <td>{row.date}</td>
                 <td>
-                  {vehicles.find((vehicle) => vehicle.id === row.vehiculeId)
-                    ?.immatriculation ?? `#${row.vehiculeId}`}
+                  {row.immatriculation ??
+                    (row.vehiculeId == null
+                      ? sousLocationVehicles.find(
+                          (vehicle) =>
+                            vehicle.id === row.vehiculeSousLocationId,
+                        )?.immatriculation
+                      : vehicles.find(
+                          (vehicle) => vehicle.id === row.vehiculeId,
+                        )?.immatriculation) ??
+                    (row.vehiculeId == null && row.vehiculeSousLocationId == null
+                      ? "—"
+                      : `#${row.vehiculeId ?? row.vehiculeSousLocationId}`)}
                 </td>
                 <td>{row.type}</td>
                 <td>{row.motif ?? "—"}</td>
@@ -977,8 +1051,13 @@ export default function MovementsPage() {
                   </button>
                   <button
                     className="action-delete"
-                    title="Supprimer"
+                    title={
+                      row.sousLocationId != null
+                        ? "Un mouvement lié à une sous-location ne peut pas être supprimé séparément"
+                        : "Supprimer"
+                    }
                     aria-label="Supprimer"
+                    disabled={row.sousLocationId != null}
                     onClick={() => setDeleting(row)}
                   >
                     <Icon name="trash" size={16} />
@@ -998,8 +1077,15 @@ export default function MovementsPage() {
         <DetailModal
           title={`Mouvement #${detail.id}`}
           subtitle={
-            vehicles.find((vehicle) => vehicle.id === detail.vehiculeId)
-              ?.immatriculation ?? `Véhicule #${detail.vehiculeId}`
+            detail.immatriculation ??
+            (detail.vehiculeId == null
+              ? sousLocationVehicles.find(
+                  (vehicle) => vehicle.id === detail.vehiculeSousLocationId,
+                )?.immatriculation
+              : vehicles.find(
+                  (vehicle) => vehicle.id === detail.vehiculeId,
+                )?.immatriculation) ??
+            `Véhicule #${detail.vehiculeId ?? detail.vehiculeSousLocationId}`
           }
           fields={[
             { label: "Date", value: detail.date },

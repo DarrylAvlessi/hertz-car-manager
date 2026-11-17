@@ -46,6 +46,14 @@ export function statsRouter(repos: Repositories, env: Env): Router {
     "/bilan",
     guard,
     asyncHandler(async (req, res) => {
+      if (req.query.scope !== undefined && typeof req.query.scope !== "string") {
+        throw badRequest("Le périmètre statistique doit être unique.")
+      }
+      const scope =
+        typeof req.query.scope === "string" ? req.query.scope : "parc"
+      if (scope !== "parc" && scope !== "sous-location") {
+        throw badRequest("Périmètre statistique invalide.")
+      }
       if (req.query.agenceId !== undefined && typeof req.query.agenceId !== "string") {
         throw badRequest("L'identifiant de l'agence doit être unique.")
       }
@@ -64,6 +72,7 @@ export function statsRouter(repos: Repositories, env: Env): Router {
           debut: typeof req.query.debut === "string" ? req.query.debut : undefined,
           fin: typeof req.query.fin === "string" ? req.query.fin : undefined,
           segment: typeof req.query.segment === "string" ? req.query.segment : undefined,
+          scope,
           agenceId,
         }),
       )

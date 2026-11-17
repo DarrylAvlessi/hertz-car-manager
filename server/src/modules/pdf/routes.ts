@@ -59,10 +59,35 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
       const fiches = await repos.clients.fiches()
       const fiche = fiches.find((c) => c.id === id)
       if (!fiche) throw notFound("Client introuvable")
-      const locations = (await repos.locations.forClient(id))
+      const [fleetLocations, sousLocations] = await Promise.all([
+        repos.locations.forClient(id),
+        repos.sousLocations.list(),
+      ])
+      const clientSousLocations = sousLocations
+        .filter((location) => location.clientId === id)
+        .map((location) => ({
+          id: location.id,
+          reference: location.reference,
+          clientId: location.clientId,
+          vehiculeId: null,
+          commercialId: location.commercialId,
+          type: location.type,
+          dateDebut: location.dateDebut,
+          dateFin: location.dateFin,
+          montant: location.montant,
+          statut: location.statut,
+          observation: location.observation,
+          client: fiche.nom,
+          vehicule: location.immatriculation,
+          isSousLocation: true,
+        }))
+      const locations = [...fleetLocations, ...clientSousLocations]
         .sort((a, b) => b.dateDebut.localeCompare(a.dateDebut))
         .map((location) => ({
           ...location,
+          type: location.isSousLocation
+            ? `Sous-location · ${location.type}`
+            : location.type,
           statut: {
             EN_COURS: "En cours",
             TERMINEE: "Retourné",
@@ -103,6 +128,7 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
         sales,
         vehicles,
         clients,
+        sousLocations,
       ] = await Promise.all([
         repos.locations.list(),
         repos.reservations.fiches(),
@@ -111,6 +137,7 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
         repos.ventesVehicules.list(),
         repos.vehicules.list(),
         repos.clients.fiches(),
+        repos.sousLocations.list(),
       ])
       const vehicleById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]))
       const clientById = new Map(clients.map((client) => [client.id, client]))
@@ -123,6 +150,17 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
             date: row.dateDebut,
             vehicule: vehicleById.get(row.vehiculeId)?.immatriculation ?? "—",
             details: `${row.type} · Client : ${row.clientId === null ? "—" : clientById.get(row.clientId)?.nom ?? "—"}`,
+            montant: row.montant,
+            statut: row.statut,
+          })),
+        ...sousLocations
+          .filter((row) => row.commercialId === id && inReportPeriod(row.dateDebut, debut, fin))
+          .map((row) => ({
+            type: "Sous-location",
+            reference: row.reference,
+            date: row.dateDebut,
+            vehicule: row.immatriculation,
+            details: `${row.type} · Client : ${clientById.get(row.clientId)?.nom ?? "—"}`,
             montant: row.montant,
             statut: row.statut,
           })),
@@ -145,7 +183,10 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
               type: "Envoi au garage",
               reference: passage ? `GAR-${passage.id}` : `MVT-${row.id}`,
               date: row.date,
-              vehicule: vehicleById.get(row.vehiculeId)?.immatriculation ?? "—",
+              vehicule:
+                row.vehiculeId == null
+                  ? (row.immatriculation ?? "—")
+                  : (vehicleById.get(row.vehiculeId)?.immatriculation ?? "—"),
               details: [passage?.typePassage, passage?.garage, passage?.motif ?? row.motif ?? row.commentaire].filter(Boolean).join(" · "),
               montant: passage?.coutTotal ?? null,
               statut: passage
@@ -163,7 +204,10 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
             type: "Sortie interne",
             reference: `MVT-${row.id}`,
             date: row.date,
-            vehicule: vehicleById.get(row.vehiculeId)?.immatriculation ?? "—",
+            vehicule:
+              row.vehiculeId == null
+                ? (row.immatriculation ?? "—")
+                : (vehicleById.get(row.vehiculeId)?.immatriculation ?? "—"),
             details: row.motif ?? row.commentaire ?? "—",
             montant: null,
             statut: row.dateRetour ? "Retour enregistré" : "Sortie en cours",
@@ -180,7 +224,10 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
             statut: `${row.statut === "CONCLUE" ? "Conclue" : "Annulée"} · ${row.statutPaiement === "PAYEE" ? "Payée" : row.statutPaiement === "PARTIELLE" ? "Partiellement payée" : "Non payée"}`,
           })),
       ].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")))
-      const rentalActivities = activities.filter((activity) => activity.type === "Location")
+      const rentalActivities = activities.filter(
+        (activity) =>
+          activity.type === "Location" || activity.type === "Sous-location",
+      )
       const reservationActivities = activities.filter((activity) => activity.type === "Réservation" && activity.statut !== "Annulée")
       const garageActivities = activities.filter((activity) => activity.type === "Envoi au garage")
       const internalExitActivities = activities.filter((activity) => activity.type === "Sortie interne")
@@ -222,6 +269,14 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
     const debut = typeof req.query.debut === "string" ? req.query.debut : undefined
     const fin = typeof req.query.fin === "string" ? req.query.fin : undefined
     const segment = typeof req.query.segment === "string" ? req.query.segment : "LCD"
+    if (req.query.scope !== undefined && typeof req.query.scope !== "string") {
+      throw badRequest("Le périmètre statistique doit être unique.")
+    }
+    const scope =
+      typeof req.query.scope === "string" ? req.query.scope : "parc"
+    if (scope !== "parc" && scope !== "sous-location") {
+      throw badRequest("Périmètre statistique invalide.")
+    }
     if (req.query.agenceId !== undefined && typeof req.query.agenceId !== "string") {
       throw badRequest("L'identifiant de l'agence doit être unique.")
     }
@@ -240,7 +295,7 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
 
     const reportData = isDemo
       ? undefined
-      : await buildBilanReport(repos, { debut, fin, segment, agenceId })
+      : await buildBilanReport(repos, { debut, fin, segment, agenceId, scope })
     const pdfBuffer = await generateBilanPdf(
       { debut, fin, segment, demo: isDemo },
       reportData,
@@ -250,7 +305,7 @@ export function pdfRouter(repos: Repositories, env: Env): Router {
     res.setHeader("Content-Type", "application/pdf")
     res.setHeader(
       "Content-Disposition",
-      `${disposition}; filename="bilan_statistique_parc.pdf"`,
+      `${disposition}; filename="bilan_statistique_${scope === "sous-location" ? "sous_locations" : "parc"}.pdf"`,
     )
     res.setHeader("Content-Length", pdfBuffer.length)
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate")

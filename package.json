@@ -19,7 +19,8 @@
     "migrate:garage-timestamps": "npm run db:migrate-garage-timestamps --prefix server",
     "migrate:sale-timestamps": "npm run db:migrate-sale-timestamps --prefix server",
     "migrate:internal-exits": "npm run db:migrate-internal-exits --prefix server",
-    "migrate:admin-roles": "npm run db:migrate-admin-roles --prefix server"
+    "migrate:admin-roles": "npm run db:migrate-admin-roles --prefix server",
+    "migrate:sous-locations": "npm run db:migrate-sous-locations --prefix server"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

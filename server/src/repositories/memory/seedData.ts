@@ -15,6 +15,8 @@ import type {
   Client,
   Commercial,
   Location,
+  SousLocation,
+  SousLocationVehicle,
   Maintenance,
   ModeleVehicule,
   Mouvement,
@@ -38,6 +40,8 @@ export interface SeedData {
   clients: Client[]
   vehicules: Vehicule[]
   locations: Location[]
+  sousLocationVehicles: SousLocationVehicle[]
+  sousLocations: SousLocation[]
   prolongations: Prolongation[]
   ventesVehicules: VenteVehicule[]
   contraventions: Contravention[]
@@ -194,6 +198,8 @@ export async function buildSeedData(): Promise<SeedData> {
         statut: "TERMINEE",
       },
     ],
+    sousLocationVehicles: [],
+    sousLocations: [],
     prolongations: [],
     ventesVehicules: [],
     contraventions: [],

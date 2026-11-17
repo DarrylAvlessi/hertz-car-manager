@@ -17,6 +17,7 @@ import {
   ReservationsRoute,
   StatistiquesRoute,
   VehiculesRoute,
+  VehiculesSousLocationRoute,
   CategoriesVehiculesRoute,
   ModelesVehiculesRoute,
   AgencesRoute,
@@ -53,6 +54,11 @@ export const router = createBrowserRouter([
       { path: "commerciaux", element: <CommerciauxRoute /> },
 
       { path: "vehicules", element: <VehiculesRoute /> },
+
+      {
+        path: "parc/vehicules-sous-location",
+        element: <VehiculesSousLocationRoute />,
+      },
 
       { path: "parc/categories", element: <CategoriesVehiculesRoute /> },
 

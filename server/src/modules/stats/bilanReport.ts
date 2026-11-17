@@ -1,4 +1,5 @@
 import type {
+  Agence,
   Commercial,
   Location,
   Maintenance,
@@ -172,6 +173,18 @@ function fr(value: number, decimals = 0): string {
   }).format(value)
 }
 
+function frRevenue(value: number, maximumFractionDigits = 2): string {
+  return new Intl.NumberFormat("fr-FR", {
+    maximumFractionDigits,
+  }).format(value)
+}
+
+function revenueLabel(value: number): string {
+  return Math.abs(value) < 1_000_000
+    ? `${frRevenue(value)} F CFA`
+    : `${frRevenue(value / 1_000_000, 8)} M F CFA`
+}
+
 function variation(current: number, previous: number, unit: "%" | "pts"): string {
   if (previous === 0) return ""
   const delta = unit === "pts" ? current - previous : ((current - previous) / previous) * 100
@@ -280,7 +293,9 @@ function buildRange(
         month.durationDays += Math.max(1, Math.floor((utcDay(end) - utcDay(start)) / DAY_MS))
       }
     }
-    for (const day of overlappingDays) {
+  }
+  for (const days of rentalDaysByVehicle.values()) {
+    for (const day of days) {
       const month = months.get(monthKey(day))
       if (month) month.rentedDays += 1
     }
@@ -491,32 +506,87 @@ export async function buildBilanReport(
     fin?: string
     segment?: string
     agenceId?: number
+    scope?: "parc" | "sous-location"
   },
 ): Promise<BilanReport> {
-  const segment = options.segment ?? "LCD"
+  const scope = options.scope ?? "parc"
+  if (scope !== "parc" && scope !== "sous-location") {
+    throw new Error("Périmètre statistique invalide.")
+  }
+  const segment = scope === "sous-location" ? "ALL" : (options.segment ?? "LCD")
   if (!["LCD", "LLD", "LEASING", "IMPRO", "AUTRE", "ALL"].includes(segment)) {
     throw new Error("Segment statistique invalide.")
   }
   const [debut, fin] = parsePeriod(options.debut, options.fin)
-  const [
-    vehicles,
-    locations,
-    selectedAgency,
-    passages,
-    maintenances,
-    commercials,
-    sinistres,
-  ] = await Promise.all([
-    repos.vehicules.list(),
-    repos.locations.list(),
-    options.agenceId === undefined
-      ? Promise.resolve(null)
-      : repos.agences.get(options.agenceId),
-    repos.passagesGarage.list(),
-    repos.maintenances.list(),
-    repos.commerciaux.list(),
-    repos.stats.immobilisationsSinistres(),
-  ])
+  let vehicles: Vehicule[]
+  let locations: Location[]
+  let selectedAgency: Agence | null = null
+  let passages: PassageGarage[]
+  let maintenances: Maintenance[]
+  let commercials: Commercial[]
+  let sinistres: SinistreImmobilisation[]
+
+  if (scope === "sous-location") {
+    const [subVehicles, subLocations, commercialRows, agency] = await Promise.all([
+      repos.sousLocations.listVehicles(),
+      repos.sousLocations.list(),
+      repos.commerciaux.list(),
+      options.agenceId === undefined
+        ? Promise.resolve(null)
+        : repos.agences.get(options.agenceId),
+    ])
+    vehicles = subVehicles.map((vehicle) => ({
+      ...vehicle,
+      marque: vehicle.marque ?? undefined,
+      modele: vehicle.modele ?? undefined,
+    }))
+    locations = subLocations.map((location) => ({
+      id: location.id,
+      reference: location.reference,
+      clientId: location.clientId,
+      vehiculeId: location.vehiculeSousLocationId,
+      commercialId: location.commercialId,
+      type: location.type,
+      dateDebut: location.dateDebut,
+      dateFin: location.dateFin,
+      dateRetourReelle: location.dateRetourReelle,
+      montant: location.montant,
+      statut: location.statut,
+      observation: location.observation,
+    }))
+    selectedAgency = agency
+    passages = []
+    maintenances = []
+    commercials = commercialRows
+    sinistres = []
+  } else {
+    const [
+      fleetVehicles,
+      fleetLocations,
+      fleetAgency,
+      fleetPassages,
+      fleetMaintenances,
+      commercialRows,
+      fleetSinistres,
+    ] = await Promise.all([
+      repos.vehicules.list(),
+      repos.locations.list(),
+      options.agenceId === undefined
+        ? Promise.resolve(null)
+        : repos.agences.get(options.agenceId),
+      repos.passagesGarage.list(),
+      repos.maintenances.list(),
+      repos.commerciaux.list(),
+      repos.stats.immobilisationsSinistres(),
+    ])
+    vehicles = fleetVehicles
+    locations = fleetLocations
+    selectedAgency = fleetAgency
+    passages = fleetPassages
+    maintenances = fleetMaintenances
+    commercials = commercialRows
+    sinistres = fleetSinistres
+  }
   if (options.agenceId !== undefined && selectedAgency === null) {
     throw badRequest("Agence statistique introuvable.")
   }
@@ -568,19 +638,24 @@ export async function buildBilanReport(
     deltaFor(summary.rentedDays, previous.rentedDays, "%"),
     deltaFor(summary.utilization, previous.utilization, "pts"),
     deltaFor(summary.rotation, previous.rotation, "%"),
-    deltaFor(summary.immobilization, previous.immobilization, "pts", true),
+    scope === "sous-location"
+      ? { text: "Non suivi pour les sous-locations", direction: 0 }
+      : deltaFor(summary.immobilization, previous.immobilization, "pts", true),
   ]
   const labels = [
     "CHIFFRE D'AFFAIRES", "LOCATIONS", "JOURS LOUÉS",
-    "TAUX D'UTILISATION", "TAUX DE ROTATION", "TAUX D'IMMOBILISATION",
+    "TAUX D'UTILISATION", "TAUX DE ROTATION",
+    scope === "sous-location" ? "IMMOBILISATION" : "TAUX D'IMMOBILISATION",
   ]
   const values = [
-    `${fr(summary.ca / 1_000_000, 1)} M F CFA`,
+    revenueLabel(summary.ca),
     fr(summary.locations),
     fr(summary.rentedDays),
     `${fr(summary.utilization, 1)} %`,
     `${fr(summary.rotation, 2)} loc./véh.`,
-    `${fr(summary.immobilization, 3)} %`,
+    scope === "sous-location"
+      ? "Non suivi"
+      : `${fr(summary.immobilization, 3)} %`,
   ]
   const kpis = labels.map((label, index) => ({
     label,
@@ -617,7 +692,7 @@ export async function buildBilanReport(
     month.revenueShort,
     month.revenueLong,
     month.revenue,
-    Math.round(month.averageBasket),
+    month.averageBasket,
     month.evol,
   ] as [string, number, number, number, number, number, number, string])
   const topVehicleRows = current.topVehicles.slice(0, 10).map((vehicle) => [
@@ -625,7 +700,7 @@ export async function buildBilanReport(
     vehicle.category,
     vehicle.locations,
     vehicle.days,
-    Math.round(vehicle.revenue),
+    vehicle.revenue,
     `${fr(vehicle.utilization)} %`,
   ] as [string, string, number, number, number, string])
   const commercialRows = current.topCommercials.map((commercial) => [
@@ -656,14 +731,26 @@ export async function buildBilanReport(
     fr(month.rotation, 2),
     fr(month.duration, 1),
     `${fr(month.utilization, 1)} %`,
-    `${fr(month.immobilization, 3)} %`,
+    scope === "sous-location"
+      ? "Non suivi"
+      : `${fr(month.immobilization, 3)} %`,
   ] as [string, string, number, string, string, string, string])
   const concentration = totalRevenue ? round(top10Revenue / totalRevenue * 100) : 0
+  const fleetLabel =
+    scope === "sous-location" ? "véhicules de sous-location" : "véhicules du parc"
   const quickRead: Array<[string, string]> = [
-    ["Chiffre d'affaires : ", `${fr(summary.ca)} F CFA sur la période${previous.ca ? `, soit ${variation(summary.ca, previous.ca, "%").split("  ")[0]} par rapport à la période précédente` : ""}${bestMonth && bestMonth.revenue > 0 ? `. Meilleur mois : ${bestMonth.fullLabel} (${fr(bestMonth.revenue / 1_000_000, 1)} M F CFA)` : ""}.`],
-    ["Utilisation : ", `${fr(summary.utilization, 1)} % des jours disponibles du parc ont été loués${peak && trough ? `. Pic en ${peak.fullLabel} (${fr(peak.utilization)} %), creux en ${trough.fullLabel} (${fr(trough.utilization)} %)` : ""}.`],
+    [
+      "Chiffre d'affaires : ",
+      `${frRevenue(summary.ca)} F CFA sur la période${previous.ca ? `, soit ${variation(summary.ca, previous.ca, "%").split("  ")[0]} par rapport à la période précédente` : ""}${bestMonth && bestMonth.revenue > 0 ? `. Meilleur mois : ${bestMonth.fullLabel} (${frRevenue(bestMonth.revenue)} F CFA)` : ""}.`,
+    ],
+    ["Utilisation : ", `${fr(summary.utilization, 1)} % des jours disponibles des ${fleetLabel} ont été loués${peak && trough ? `. Pic en ${peak.fullLabel} (${fr(peak.utilization)} %), creux en ${trough.fullLabel} (${fr(trough.utilization)} %)` : ""}.`],
     ["Rotation : ", `${fr(summary.rotation, 2)} locations par véhicule, pour une durée moyenne de ${fr(summary.duration, 1)} jours par location.`],
-    ["Immobilisation : ", `${fr(summary.immobilization, 3)} % des jours-véhicules sont perdus (${fr(summary.immobilizedDays)} jours).`],
+    [
+      "Immobilisation : ",
+      scope === "sous-location"
+        ? "Non suivie pour les véhicules de sous-location."
+        : `${fr(summary.immobilization, 3)} % des jours-véhicules sont perdus (${fr(summary.immobilizedDays)} jours).`,
+    ],
     ["Concentration : ", `les 10 véhicules les plus rentables réalisent ${fr(concentration)} % du chiffre d'affaires.`],
   ]
   if (!summary.locations) quickRead.unshift(["Aucune location enregistrée sur la période : ", "les indicateurs de location sont à zéro."])
@@ -674,7 +761,7 @@ export async function buildBilanReport(
     caTotalShort,
     caTotalLong,
     summary.ca,
-    Math.round(summary.panierMoyen),
+    summary.panierMoyen,
     "",
   ]
   const avgVehicleCount = summary.avgVehicles
@@ -685,10 +772,34 @@ export async function buildBilanReport(
     fr(summary.rotation, 2),
     fr(summary.duration, 1),
     `${fr(summary.utilization, 1)} %`,
-    `${fr(summary.immobilization, 3)} %`,
+    scope === "sous-location"
+      ? "Non suivi"
+      : `${fr(summary.immobilization, 3)} %`,
   ]
   const monthCount = keys.length
-  const warning = selectedAgency
+  const agencyDisplayName = selectedAgency
+    ? selectedAgency.nom.toLowerCase().startsWith("agence ")
+      ? selectedAgency.nom
+      : `Agence ${selectedAgency.nom}`
+    : null
+  const agencyLabel =
+    selectedAgency && agencyDisplayName
+      ? `${agencyDisplayName}${selectedAgency.code ? ` (${selectedAgency.code})` : ""}`
+      : null
+  const warning = scope === "sous-location"
+    ? [
+        summary.noVehicles
+          ? "Aucun véhicule de sous-location n'est enregistré."
+          : selectedAgency && summary.noRentals
+            ? `Aucune sous-location n'est attribuée aux commerciaux de ${agencyDisplayName} ; les véhicules restent globaux.`
+            : selectedAgency
+              ? `Sous-locations et chiffre d'affaires filtrés via les commerciaux de ${agencyDisplayName} ; les véhicules restent globaux.`
+              : null,
+        "Les immobilisations (garage et sinistre) ne sont pas suivies pour les véhicules de sous-location.",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : selectedAgency
     ? summary.noRentals
       ? "Agence : aucune location attribuée ; flotte et immobilisations restent globales."
       : "Agence : locations et CA filtrés via le commercial ; flotte et immobilisations restent globales."
@@ -705,15 +816,20 @@ export async function buildBilanReport(
     AUTRE: "Autre",
     ALL: "Tous les segments",
   }
-  const perimetre = [
-    segmentLabel[segment] ?? segment,
-    selectedAgency
-      ? `Agence ${selectedAgency.nom}${selectedAgency.code ? ` (${selectedAgency.code})` : ""}`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ")
-
+  const perimetre =
+    scope === "sous-location"
+      ? [
+          "Sous-locations · véhicules hors parc",
+          agencyLabel,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : [
+          segmentLabel[segment] ?? segment,
+          agencyLabel,
+        ]
+          .filter(Boolean)
+          .join(" · ")
   return {
     periode_str: fullPeriod,
     date_edition: new Date().toLocaleDateString("fr-FR"),
@@ -748,7 +864,7 @@ export async function buildBilanReport(
       ["Longue durée", caTotalLong, totalRevenue ? round(caTotalLong / totalRevenue * 100) : 0],
     ],
     ca_categories: revenueByCategory.length
-      ? revenueByCategory.map((item) => [item.name, round(item.value / 1_000_000, 1)])
+      ? revenueByCategory.map((item) => [item.name, item.value / 1_000_000])
       : [["Aucune donnée", 0]],
     top_10_vehicules: topVehicleRows.length
       ? topVehicleRows
@@ -783,10 +899,18 @@ export async function buildBilanReport(
     definitions: [
       ["Chiffre d'affaires", "Somme de location.montant_total", "Rattaché au mois de la date de début ; prolongations et suppléments inclus."],
       ["Jour loué", "Jour calendaire sous contrat", "Départ inclus, retour exclu ; minimum un jour par location."],
-      ["Jours-véhicules du parc", "Somme des jours de présence des véhicules", "De date_entree_parc à date_sortie_parc ; entrée inconnue = début de période."],
-      ["Taux d'utilisation", "Jours loués ÷ jours-véhicules du parc × 100", "Calculé sur les totaux de la période et le segment sélectionné."],
+      [`Jours-véhicules ${scope === "sous-location" ? "de sous-location" : "du parc"}`, "Somme des jours de présence des véhicules", "De date_entree_parc à date_sortie_parc ; entrée inconnue = début de période."],
+      ["Taux d'utilisation", `Jours loués ÷ jours-véhicules ${scope === "sous-location" ? "de sous-location" : "du parc"} × 100`, "Calculé sur les totaux de la période et le périmètre sélectionné."],
       ["Taux de rotation", "Locations démarrées ÷ nombre moyen de véhicules", "Nombre moyen = jours-véhicules ÷ jours observés."],
-      ["Taux d'immobilisation", "Jours d'immobilisation ÷ jours-véhicules × 100", "Garage ou sinistre immobilisant ; les chevauchements ne sont comptés qu'une fois."],
+      [
+        scope === "sous-location" ? "Immobilisation" : "Taux d'immobilisation",
+        scope === "sous-location"
+          ? "Non calculé"
+          : "Jours d'immobilisation ÷ jours-véhicules × 100",
+        scope === "sous-location"
+          ? "Non suivie pour les véhicules de sous-location."
+          : "Garage ou sinistre immobilisant ; les chevauchements ne sont comptés qu'une fois.",
+      ],
       ["Durée moyenne", "Jours loués ÷ nombre de locations", "Durée moyenne d'une location, en jours."],
       ["Panier moyen", "Chiffre d'affaires ÷ nombre de locations", "Montant moyen d'une location, en F CFA."],
     ],

@@ -156,12 +156,19 @@ def format_fr_decimal(val, dec=1):
     fmt = f"{{:,.{dec}f}}"
     return fmt.format(float(val)).replace(",", "\u00A0").replace(".", ",")
 
+def format_fr_montant(val):
+    if val is None: return ""
+    formatted = format(Decimal(str(val)), ",f")
+    whole, separator, fraction = formatted.partition(".")
+    fraction = fraction.rstrip("0")
+    return whole.replace(",", "\u00A0") + ("," + fraction if separator and fraction else "")
+
 def format_fcfa(val):
-    return f"{format_fr_entier(val)}\u00A0F\u00A0CFA"
+    return f"{format_fr_montant(val)}\u00A0F\u00A0CFA"
 
 def format_mfcfa(val):
-    m = float(val) / 1_000_000.0
-    return f"{format_fr_decimal(m, 1)}\u00A0M\u00A0F\u00A0CFA"
+    m = Decimal(str(val)) / Decimal(1_000_000)
+    return f"{format_fr_montant(m)}\u00A0M\u00A0F\u00A0CFA"
 
 def format_variation(val, is_pts=False):
     if val is None: return ""
@@ -579,7 +586,7 @@ class ChartGenerator:
         plt.close(fig)
         return path
 
-    def chart7_repartition_jours_vehicules(self, labels, split_dict):
+    def chart7_repartition_jours_vehicules(self, labels, split_dict, immobilization_tracked=True):
         fig, ax = self._setup_fig(88, 60)
         x = np.arange(len(labels))
         loues = np.array(split_dict['Loués'])
@@ -587,8 +594,17 @@ class ChartGenerator:
         dispo = np.array(split_dict['Disponibles'])
 
         ax.bar(x, loues, width=0.58, color=HEX_GREEN, zorder=2, label="Loués")
-        ax.bar(x, immo, width=0.58, bottom=loues, color=HEX_RED, zorder=2, label="Immobilisés")
-        ax.bar(x, dispo, width=0.58, bottom=loues + immo, color=HEX_BRAND, zorder=2, label="Disponibles")
+        if immobilization_tracked:
+            ax.bar(x, immo, width=0.58, bottom=loues, color=HEX_RED, zorder=2, label="Immobilisés")
+        ax.bar(
+            x,
+            dispo,
+            width=0.58,
+            bottom=loues + immo if immobilization_tracked else loues,
+            color=HEX_BRAND,
+            zorder=2,
+            label="Disponibles",
+        )
 
         ax.set_ylim(0, 100)
         ax.set_xticks(x)
@@ -599,7 +615,7 @@ class ChartGenerator:
         ax.spines['right'].set_visible(False)
         ax.spines['left'].set_color(HEX_BORDER)
         ax.spines['bottom'].set_color(HEX_BORDER)
-        ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.28), ncol=3, frameon=False,
+        ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.28), ncol=3 if immobilization_tracked else 2, frameon=False,
                   fontsize=6.2, prop={'family': 'Montserrat'})
 
         fig.tight_layout(pad=0.4)
@@ -1044,10 +1060,10 @@ class PDFReportDrawer:
                 mois,
                 format_fr_entier(loc),
                 format_fr_entier(jrs),
-                format_fr_entier(ca_lcd),
-                format_fr_entier(ca_lld),
-                format_fr_entier(ca_tot),
-                format_fr_entier(pan),
+                format_fr_montant(ca_lcd),
+                format_fr_montant(ca_lld),
+                format_fr_montant(ca_tot),
+                format_fr_montant(pan),
                 evol
             ])
 
@@ -1056,10 +1072,10 @@ class PDFReportDrawer:
             tot[0],
             format_fr_entier(tot[1]),
             format_fr_entier(tot[2]),
-            format_fr_entier(tot[3]),
-            format_fr_entier(tot[4]),
-            format_fr_entier(tot[5]),
-            format_fr_entier(tot[6]),
+            format_fr_montant(tot[3]),
+            format_fr_montant(tot[4]),
+            format_fr_montant(tot[5]),
+            format_fr_montant(tot[6]),
             tot[7]
         ])
 
@@ -1125,7 +1141,7 @@ class PDFReportDrawer:
                 cat,
                 format_fr_entier(loc),
                 format_fr_entier(jrs),
-                format_fr_entier(ca),
+                format_fr_montant(ca),
                 ut
             ])
 
@@ -1229,7 +1245,7 @@ class PDFReportDrawer:
         data_plus = [h_5]
         for row in d['top_5_plus_utilises']:
             data_plus.append([row[0], format_fr_entier(row[1]), format_fr_entier(row[2]), row[3]])
-        t_plus = Table(data_plus, colWidths=col_w_5, rowHeights=[5.6 * mm] + [5.6 * mm] * 5)
+        t_plus = Table(data_plus, colWidths=col_w_5, rowHeights=[5.6 * mm] * len(data_plus))
         t_style_5 = [
             ('BACKGROUND', (0, 0), (-1, 0), COLOR_DARK),
             ('TEXTCOLOR', (0, 0), (-1, 0), COLOR_WHITE),
@@ -1253,7 +1269,7 @@ class PDFReportDrawer:
         data_moins = [h_5]
         for row in d['top_5_moins_utilises']:
             data_moins.append([row[0], format_fr_entier(row[1]), format_fr_entier(row[2]), row[3]])
-        t_moins = Table(data_moins, colWidths=col_w_5, rowHeights=[5.6 * mm] + [5.6 * mm] * 5)
+        t_moins = Table(data_moins, colWidths=col_w_5, rowHeights=[5.6 * mm] * len(data_moins))
         t_moins.setStyle(TableStyle(t_style_5))
         tw, th = t_moins.wrap(88 * mm, 40 * mm)
         t_moins.drawOn(c, 107 * mm, y_top(199.0 + (th / mm)))
@@ -1293,7 +1309,8 @@ class PDFReportDrawer:
         self.draw_section_title(15, 193.0, "Tableau de bord mensuel")
 
         col_w_tb = [24 * mm, 28 * mm, 24 * mm, 22 * mm, 26 * mm, 28 * mm, 28 * mm]
-        h_tb = ["Mois", "Véhicules (moy.)", "Locations", "Rotation", "Durée moy. (j)", "Utilisation", "Immobilisation"]
+        immobilization_tracked = "sous-location" not in d.get("perimetre", "").lower()
+        h_tb = ["Mois", "Véhicules (moy.)", "Locations", "Rotation", "Durée moy. (j)", "Utilisation", "Immobilisation" if immobilization_tracked else "Immobilisation"]
         table_tb_data = [h_tb]
 
         for row in d['tb_mensuel']:
@@ -1547,7 +1564,8 @@ def generate_pdf(output_path, fonts_dir, logo_path, is_demo=True, custom_data=No
             ),
             'chart7': cg.chart7_repartition_jours_vehicules(
                 data['mois_labels'],
-                data['jours_vehicules_split']
+                data['jours_vehicules_split'],
+                "sous-location" not in data.get("perimetre", "").lower(),
             ),
             'chart8': cg.chart8_utilisation_categories(
                 [x[0] for x in data['utilisation_categories']],

@@ -30,7 +30,15 @@ type Location = {
 
   clientId: number
 
-  vehiculeId: number
+  vehiculeId: number | null
+
+  immatriculation?: string
+
+  isSousLocation?: boolean
+
+  sousLocationId?: number
+
+  client?: string
 
   commercialId: number | null
 
@@ -79,6 +87,23 @@ type ProlongationForm = {
   montantSupplementaire: string
 }
 
+type SousLocationForm = {
+  reference: string
+  clientId: string
+  commercialId: string
+  type: "Courte durée" | "Longue durée"
+  dateDebut: string
+  dateFin: string
+  montant: string
+  statut: Location["statut"]
+  observation: string
+  modePaiement: string
+  referenceFacture: string
+  dateFacturation: string
+  paye: "" | "OUI" | "NON"
+  datePaiement: string
+}
+
 type Option = {
   id: number
   nom?: string
@@ -94,7 +119,11 @@ const locationCsvHeaders = [
 
   "Début",
 
+  "Heure de départ",
+
   "Fin",
+
+  "Heure de retour",
 
   "Durée",
 
@@ -124,7 +153,9 @@ const locationCsvExamples: Array<Array<string | number>> = [
     "EXEMPLE - À remplacer",
     "EXEMPLE",
     "01/01/2026",
+    "08:00",
     "02/01/2026",
+    "17:00",
     1,
     "TPE",
     "EXEMPLE",
@@ -141,7 +172,9 @@ const locationCsvExamples: Array<Array<string | number>> = [
     "HERTZ BENIN",
     "AB 1234 RB",
     "05/02/2026",
+    "09:00",
     "08/02/2026",
+    "18:00",
     3,
     "Virement",
     "FACT-2026-002",
@@ -168,6 +201,12 @@ function csvDate(value: string | null | undefined): string {
   const [year, month, day] = value.slice(0, 10).split("-")
 
   return year && month && day ? `${day}/${month}/${year}` : ""
+}
+
+function csvTime(value: string | null | undefined): string {
+  if (!value) return ""
+  const time = value.replace("T", " ").slice(11, 16)
+  return /^\d{2}:\d{2}$/.test(time) ? time : ""
 }
 
 function rentalDuration(start: string, end: string): number {
@@ -245,6 +284,12 @@ export default function LocationsPage() {
 
   const [editing, setEditing] = useState<Location | null>(null)
 
+  const [subLocationEditing, setSubLocationEditing] =
+    useState<Location | null>(null)
+  const [subLocationForm, setSubLocationForm] =
+    useState<SousLocationForm | null>(null)
+  const [subLocationError, setSubLocationError] = useState<string | null>(null)
+
   const [detail, setDetail] = useState<Location | null>(null)
 
   const [deleting, setDeleting] = useState<Location | null>(null)
@@ -258,6 +303,9 @@ export default function LocationsPage() {
   const [statusFilter, setStatusFilter] = useState("")
 
   const [typeFilter, setTypeFilter] = useState("")
+  const [sourceFilter, setSourceFilter] = useState<
+    "" | "parc" | "sous-location"
+  >("")
 
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("all")
 
@@ -270,6 +318,16 @@ export default function LocationsPage() {
   const [completionModalOpen, setCompletionModalOpen] = useState(false)
 
   const [importingCsv, setImportingCsv] = useState(false)
+  const [pendingImport, setPendingImport] = useState<{
+    csv: string
+    registrations: string[]
+  } | null>(null)
+  const [importChoices, setImportChoices] = useState<
+    Record<string, "sous-location" | "parc">
+  >({})
+  const [importDecisionError, setImportDecisionError] = useState<string | null>(
+    null,
+  )
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<"csv" | "xlsx">("csv")
   const [exportMode, setExportMode] = useState<"all" | "range">("all")
@@ -317,14 +375,18 @@ export default function LocationsPage() {
     return rows.filter(
       (row) =>
         (!needle ||
-          `${row.reference} ${row.clientId} ${row.vehiculeId} ${row.type} ${row.statut}`
+          `${row.reference} ${row.client ?? row.clientId} ${row.immatriculation ?? row.vehiculeId ?? ""} ${row.type} ${row.statut}`
             .toLowerCase()
             .includes(needle)) &&
         (!statusFilter || effectiveStatus(row) === statusFilter) &&
         (!typeFilter || row.type === typeFilter) &&
+        (!sourceFilter ||
+          (sourceFilter === "sous-location"
+            ? row.isSousLocation
+            : !row.isSousLocation)) &&
         matchesDatePeriod(row.dateDebut, datePeriod),
     )
-  }, [rows, query, statusFilter, typeFilter, datePeriod])
+  }, [rows, query, statusFilter, typeFilter, sourceFilter, datePeriod])
 
   const visibleRows = filteredRows.slice(
     (page - 1) * TABLE_PAGE_SIZE,
@@ -333,7 +395,7 @@ export default function LocationsPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [query, statusFilter, typeFilter, datePeriod])
+  }, [query, statusFilter, typeFilter, sourceFilter, datePeriod])
 
   useEffect(() => {
     if (page > Math.max(1, Math.ceil(filteredRows.length / TABLE_PAGE_SIZE))) {
@@ -432,13 +494,86 @@ export default function LocationsPage() {
     if (!deleting) return
 
     try {
-      await apiFetch(`/api/locations/${deleting.id}`, { method: "DELETE" })
+      const path = deleting.isSousLocation
+        ? `/api/locations/sous-locations/${deleting.id}`
+        : `/api/locations/${deleting.id}`
+      await apiFetch(path, { method: "DELETE" })
 
       setDeleting(null)
 
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : "Suppression impossible")
+    }
+  }
+
+  const openSubLocation = (location: Location) => {
+    setError(null)
+    setSubLocationError(null)
+    setSubLocationEditing(location)
+    setSubLocationForm({
+      reference: location.reference,
+      clientId: String(location.clientId),
+      commercialId: location.commercialId
+        ? String(location.commercialId)
+        : "",
+      type: location.type,
+      dateDebut: location.dateDebut.replace(" ", "T").slice(0, 16),
+      dateFin: location.dateFin.replace(" ", "T").slice(0, 16),
+      montant: String(location.montant),
+      statut: location.statut,
+      observation: location.observation ?? "",
+      modePaiement: location.modePaiement ?? "",
+      referenceFacture: location.referenceFacture ?? "",
+      dateFacturation: location.dateFacturation?.slice(0, 10) ?? "",
+      paye: location.paye == null ? "" : location.paye ? "OUI" : "NON",
+      datePaiement: location.datePaiement?.slice(0, 10) ?? "",
+    })
+  }
+
+  const saveSubLocation = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!subLocationEditing || !subLocationForm) return
+    setSubLocationError(null)
+
+    try {
+      await apiFetch(
+        `/api/locations/sous-locations/${subLocationEditing.id}`,
+        {
+          method: "PUT",
+          body: {
+            reference: subLocationForm.reference.trim() || null,
+            clientId: Number(subLocationForm.clientId),
+            commercialId: subLocationForm.commercialId
+              ? Number(subLocationForm.commercialId)
+              : null,
+            type: subLocationForm.type,
+            dateDebut: subLocationForm.dateDebut,
+            dateFin: subLocationForm.dateFin,
+            montant: Number(subLocationForm.montant),
+            statut: subLocationForm.statut,
+            observation: subLocationForm.observation.trim() || null,
+            modePaiement: subLocationForm.modePaiement.trim() || null,
+            referenceFacture:
+              subLocationForm.referenceFacture.trim() || null,
+            dateFacturation: subLocationForm.dateFacturation || null,
+            paye:
+              subLocationForm.paye === ""
+                ? null
+                : subLocationForm.paye === "OUI",
+            payeImport: subLocationForm.paye || null,
+            datePaiement: subLocationForm.datePaiement || null,
+          },
+        },
+      )
+      setSubLocationEditing(null)
+      setSubLocationForm(null)
+      await load()
+      notifyDashboardMutation("Sous-location modifiée avec succès.")
+    } catch (e) {
+      setSubLocationError(
+        e instanceof Error ? e.message : "Modification impossible",
+      )
     }
   }
 
@@ -522,14 +657,22 @@ export default function LocationsPage() {
           )
         : rows
     const data = selectedRows.map((location) => [
-      clients.find((client) => client.id === location.clientId)?.nom ?? "",
+      location.client ??
+        clients.find((client) => client.id === location.clientId)?.nom ??
+        "",
 
-      vehicles.find((vehicle) => vehicle.id === location.vehiculeId)
-        ?.immatriculation ?? "",
+      location.immatriculation ??
+        vehicles.find((vehicle) => vehicle.id === location.vehiculeId)
+          ?.immatriculation ??
+        "",
 
       csvDate(location.dateDebut),
 
+      csvTime(location.dateDebut),
+
       csvDate(location.dateFin),
+
+      csvTime(location.dateFin),
 
       rentalDuration(location.dateDebut, location.dateFin),
 
@@ -565,7 +708,7 @@ export default function LocationsPage() {
     if (format === "xlsx") {
       const excelData = data.map((row, index) =>
         row.map((value, column) =>
-          column === 9
+          column === locationCsvHeaders.indexOf("PAYE")
             ? selectedRows[index]?.paye == null
               ? ""
               : selectedRows[index].paye
@@ -592,6 +735,44 @@ export default function LocationsPage() {
     }
   }
 
+  const finishLocationsImport = async (
+    csv: string,
+    sousLocationImmatriculations: string[],
+  ) => {
+    setImportingCsv(true)
+    setError(null)
+    try {
+      const result = await apiFetch<{
+        created: number
+        clientsCreated: number
+        sousLocationsCreated: number
+      }>("/api/locations/import-csv", {
+        method: "POST",
+        body: { csv, sousLocationImmatriculations },
+      })
+      await load()
+      setPendingImport(null)
+      setImportChoices({})
+      const clientMessage =
+        result.clientsCreated > 0
+          ? ` ${result.clientsCreated} nouveau(x) client(s) créé(s) automatiquement.`
+          : ""
+      const subLocationMessage =
+        result.sousLocationsCreated > 0
+          ? ` ${result.sousLocationsCreated} sous-location(s) enregistrée(s).`
+          : ""
+      notifyDashboardMutation(
+        `Import terminé : ${result.created} location(s) enregistrée(s), avec les données de facturation et de paiement.${clientMessage}${subLocationMessage}`,
+      )
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Import CSV impossible"
+      if (pendingImport) setImportDecisionError(message)
+      else setError(message)
+    } finally {
+      setImportingCsv(false)
+    }
+  }
+
   const importLocationsCsv = async (event: ChangeEvent<HTMLInputElement>) => {
     const inputElement = event.currentTarget
 
@@ -604,27 +785,24 @@ export default function LocationsPage() {
     setError(null)
 
     try {
-      const result = await apiFetch<{
-        created: number
-        clientsCreated: number
-      }>(
-        "/api/locations/import-csv",
+      const csv = await readCsvFile(file)
+      const preview = await apiFetch<{ unknownRegistrations: string[] }>(
+        "/api/locations/import-csv/preview",
         {
           method: "POST",
-
-          body: { csv: await readCsvFile(file) },
+          body: { csv },
         },
       )
-
-      await load()
-
-      const clientMessage =
-        result.clientsCreated > 0
-          ? ` ${result.clientsCreated} nouveau(x) client(s) créé(s) automatiquement.`
-          : ""
-      notifyDashboardMutation(
-        `Import terminé : ${result.created} location(s) enregistrée(s), avec les données de facturation et de paiement.${clientMessage}`,
-      )
+      if (preview.unknownRegistrations.length > 0) {
+        setPendingImport({
+          csv,
+          registrations: preview.unknownRegistrations,
+        })
+        setImportChoices({})
+        setImportDecisionError(null)
+      } else {
+        await finishLocationsImport(csv, [])
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Import CSV impossible")
     } finally {
@@ -695,7 +873,7 @@ export default function LocationsPage() {
 
   return (
     <section className="data-card">
-      <div className="data-toolbar">
+      <div className="data-toolbar locations-toolbar">
         <div>
           <h2>Gestion des locations</h2>
           <p>{filteredRows.length} éléments affichés</p>
@@ -774,6 +952,120 @@ export default function LocationsPage() {
             </form>
           </div>
         )}
+        {pendingImport && (
+          <div className="modal-backdrop">
+            <div className="modal">
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => {
+                  setPendingImport(null)
+                  setImportChoices({})
+                  setImportDecisionError(null)
+                }}
+                aria-label="Annuler l’import"
+              >
+                <Icon name="close" />
+              </button>
+              <p className="kicker">VÉHICULES ABSENTS DU PARC</p>
+              <h2>Classer les véhicules inconnus</h2>
+              <p>
+                Pour chaque immatriculation, indiquez s’il s’agit d’une
+                sous-location ou d’un véhicule à ajouter au parc.
+              </p>
+              <div className="modal-fields location-import-choices">
+                {pendingImport.registrations.map((registration) => (
+                  <fieldset
+                    className="location-import-choice"
+                    key={registration}
+                  >
+                    <legend>{registration}</legend>
+                    <label className="location-import-choice-option">
+                      <input
+                        type="radio"
+                        name={`classification-${registration}`}
+                        value="sous-location"
+                        checked={
+                          importChoices[registration] === "sous-location"
+                        }
+                        onChange={() => {
+                          setImportChoices((current) => ({
+                            ...current,
+                            [registration]: "sous-location",
+                          }))
+                          setImportDecisionError(null)
+                        }}
+                      />
+                      Sous-location
+                    </label>
+                    <label className="location-import-choice-option">
+                      <input
+                        type="radio"
+                        name={`classification-${registration}`}
+                        value="parc"
+                        checked={importChoices[registration] === "parc"}
+                        onChange={() => {
+                          setImportChoices((current) => ({
+                            ...current,
+                            [registration]: "parc",
+                          }))
+                          setImportDecisionError(null)
+                        }}
+                      />
+                      Véhicule à ajouter au parc
+                    </label>
+                  </fieldset>
+                ))}
+              </div>
+              {importDecisionError && (
+                <p className="form-error">{importDecisionError}</p>
+              )}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setPendingImport(null)
+                    setImportChoices({})
+                    setImportDecisionError(null)
+                  }}
+                  disabled={importingCsv}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  className="primary small"
+                  disabled={
+                    importingCsv ||
+                    pendingImport.registrations.some(
+                      (registration) => !importChoices[registration],
+                    )
+                  }
+                  onClick={() => {
+                    const fleetRegistrations =
+                      pendingImport.registrations.filter(
+                        (registration) =>
+                          importChoices[registration] === "parc",
+                      )
+                    if (fleetRegistrations.length > 0) {
+                      setImportDecisionError(
+                        `Import refusé. Enregistrez d’abord dans le parc : ${fleetRegistrations.join(", ")}.`,
+                      )
+                      return
+                    }
+                    void finishLocationsImport(
+                      pendingImport.csv,
+                      pendingImport.registrations,
+                    )
+                  }}
+                >
+                  {importingCsv ? "Import…" : "Confirmer l’import"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div>
           <input
             className="table-search"
@@ -790,6 +1082,20 @@ export default function LocationsPage() {
             <option value="">Tous les types</option>
             <option>Courte durée</option>
             <option>Longue durée</option>
+          </select>
+          <select
+            className="secondary status-filter"
+            aria-label="Filtrer par origine du véhicule"
+            value={sourceFilter}
+            onChange={(event) =>
+              setSourceFilter(
+                event.target.value as "" | "parc" | "sous-location",
+              )
+            }
+          >
+            <option value="">Tous les véhicules</option>
+            <option value="parc">Véhicules du parc</option>
+            <option value="sous-location">Sous-locations</option>
           </select>
           <select
             className="secondary status-filter"
@@ -823,17 +1129,23 @@ export default function LocationsPage() {
           </thead>
           <tbody>
             {visibleRows.map((row) => (
-              <tr key={row.id}>
+              <tr key={`${row.isSousLocation ? "sous-location" : "location"}-${row.id}`}>
                 <td>
                   <strong>{row.reference}</strong>
                 </td>
                 <td>
-                  {clients.find((item) => item.id === row.clientId)?.nom ??
+                  {row.client ??
+                    clients.find((item) => item.id === row.clientId)?.nom ??
                     row.clientId}
                 </td>
                 <td>
-                  {vehicles.find((item) => item.id === row.vehiculeId)
-                    ?.immatriculation ?? row.vehiculeId}
+                  {row.immatriculation ??
+                    vehicles.find((item) => item.id === row.vehiculeId)
+                      ?.immatriculation ??
+                    row.vehiculeId}
+                  {row.isSousLocation && (
+                    <small className="block">Sous-location</small>
+                  )}
                 </td>
                 <td>{row.type}</td>
                 <td>{displayDateTime(row.dateFin)}</td>
@@ -845,7 +1157,9 @@ export default function LocationsPage() {
                   <button
                     className="action-edit"
                     title="Modifier"
-                    onClick={() => open(row)}
+                    onClick={() =>
+                      row.isSousLocation ? openSubLocation(row) : open(row)
+                    }
                   >
                     <Icon name="edit" size={16} />
                   </button>
@@ -867,6 +1181,249 @@ export default function LocationsPage() {
         total={filteredRows.length}
         onChange={setPage}
       />
+      {subLocationForm && (
+        <div className="modal-backdrop">
+          <form className="modal location-modal" onSubmit={saveSubLocation}>
+            <button
+              className="modal-close"
+              type="button"
+              onClick={() => {
+                setSubLocationEditing(null)
+                setSubLocationForm(null)
+              }}
+              aria-label="Fermer"
+            >
+              <Icon name="close" />
+            </button>
+            <p className="kicker">SOUS-LOCATION</p>
+            <h2>Modifier la sous-location</h2>
+            <div className="modal-fields">
+              <label>
+                <span>Référence</span>
+                <input
+                  maxLength={30}
+                  value={subLocationForm.reference}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      reference: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Client</span>
+                <SearchableSelect
+                  required
+                  value={subLocationForm.clientId}
+                  onChange={(value) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      clientId: value,
+                    })
+                  }
+                  options={clients.map((item) => ({
+                    value: String(item.id),
+                    label: item.nom ?? String(item.id),
+                  }))}
+                  placeholder="Rechercher un client…"
+                />
+              </label>
+              <label>
+                <span>Commercial</span>
+                <SearchableSelect
+                  value={subLocationForm.commercialId}
+                  onChange={(value) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      commercialId: value,
+                    })
+                  }
+                  options={commercials.map((item) => ({
+                    value: String(item.id),
+                    label: item.nom ?? String(item.id),
+                  }))}
+                  placeholder="Aucun commercial"
+                  emptyOptionLabel="Aucun commercial"
+                />
+              </label>
+              <label>
+                <span>Type</span>
+                <select
+                  value={subLocationForm.type}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      type: event.target.value as SousLocationForm["type"],
+                    })
+                  }
+                >
+                  <option>Courte durée</option>
+                  <option>Longue durée</option>
+                </select>
+              </label>
+              <label>
+                <span>Date et heure de départ</span>
+                <input
+                  type="datetime-local"
+                  required
+                  value={subLocationForm.dateDebut}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      dateDebut: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Date et heure de retour</span>
+                <input
+                  type="datetime-local"
+                  required
+                  value={subLocationForm.dateFin}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      dateFin: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Montant (FCFA)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  required
+                  value={subLocationForm.montant}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      montant: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Statut</span>
+                <select
+                  value={subLocationForm.statut}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      statut: event.target.value as Location["statut"],
+                    })
+                  }
+                >
+                  <option value="EN_COURS">En cours</option>
+                  <option value="EN_RETARD">En retard</option>
+                  <option value="EN_PROLONGATION">En prolongation</option>
+                  <option value="TERMINEE">Terminée</option>
+                </select>
+              </label>
+              <label>
+                <span>Mode de paiement</span>
+                <input
+                  maxLength={80}
+                  value={subLocationForm.modePaiement}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      modePaiement: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Référence de facture</span>
+                <input
+                  maxLength={30}
+                  value={subLocationForm.referenceFacture}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      referenceFacture: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Date de facturation</span>
+                <input
+                  type="date"
+                  value={subLocationForm.dateFacturation}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      dateFacturation: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Paiement</span>
+                <select
+                  value={subLocationForm.paye}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      paye: event.target.value as SousLocationForm["paye"],
+                    })
+                  }
+                >
+                  <option value="">Non renseigné</option>
+                  <option value="OUI">Payée</option>
+                  <option value="NON">Non payée</option>
+                </select>
+              </label>
+              <label>
+                <span>Date de paiement</span>
+                <input
+                  type="date"
+                  value={subLocationForm.datePaiement}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      datePaiement: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Observation</span>
+                <textarea
+                  maxLength={255}
+                  value={subLocationForm.observation}
+                  onChange={(event) =>
+                    setSubLocationForm({
+                      ...subLocationForm,
+                      observation: event.target.value,
+                    })
+                  }
+                />
+              </label>
+            </div>
+            {subLocationError && (
+              <p className="form-error">{subLocationError}</p>
+            )}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setSubLocationEditing(null)
+                  setSubLocationForm(null)
+                }}
+              >
+                Annuler
+              </button>
+              <button className="primary small">Enregistrer</button>
+            </div>
+          </form>
+        </div>
+      )}
       {form && (
         <div className="modal-backdrop">
           <form className="modal location-modal" onSubmit={save}>
@@ -1256,6 +1813,7 @@ export default function LocationsPage() {
               label: "Client",
 
               value:
+                detail.client ??
                 clients.find((item) => item.id === detail.clientId)?.nom ??
                 "Client introuvable",
             },
@@ -1264,8 +1822,10 @@ export default function LocationsPage() {
               label: "Véhicule",
 
               value:
+                detail.immatriculation ??
                 vehicles.find((item) => item.id === detail.vehiculeId)
-                  ?.immatriculation ?? "Véhicule introuvable",
+                  ?.immatriculation ??
+                "Véhicule introuvable",
             },
 
             {
@@ -1309,7 +1869,10 @@ export default function LocationsPage() {
       {deleting && (
         <div className="modal-backdrop">
           <div className="modal">
-            <h2>Supprimer cette location ?</h2>
+            <h2>
+              Supprimer cette{" "}
+              {deleting.isSousLocation ? "sous-location" : "location"} ?
+            </h2>
             <div className="modal-actions">
               <button className="secondary" onClick={() => setDeleting(null)}>
                 Annuler

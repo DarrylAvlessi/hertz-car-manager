@@ -9,6 +9,7 @@ export const MODULE_ICONS: Record<string, string> = {
   Commerciaux: "sellers",
   Centres: "center",
   Véhicules: "car",
+  "Véhicules de sous-location": "car",
   Locations: "rental",
   Réservations: "booking",
   Contraventions: "ticket",

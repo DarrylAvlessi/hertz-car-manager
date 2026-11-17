@@ -28,6 +28,7 @@ import {
   normalizeCsvHeader,
   normalizeCsvLookup,
   normalizeCsvName,
+  parseCsvDate,
   parseCsvDocument,
 } from "../../lib/csv.js"
 
@@ -81,6 +82,42 @@ const commercialCsvSchema = z.object({
 
 const locationCsvSchema = z.object({
   csv: z.string().min(1).max(1_000_000),
+})
+
+const locationImportSchema = locationCsvSchema.extend({
+  sousLocationImmatriculations: z
+    .array(z.string().trim().min(1).max(30))
+    .max(500)
+    .default([]),
+})
+
+const sousLocationVehicleSchema = z.object({
+  immatriculation: z.string().trim().min(1).max(30),
+  marque: z.string().trim().max(60).nullable().optional(),
+  modele: z.string().trim().max(80).nullable().optional(),
+  version: z.string().trim().max(60).nullable().optional(),
+  annee: z.number().int().min(1900).max(2200).nullable().optional(),
+  numeroChassis: z.string().trim().max(40).nullable().optional(),
+  couleur: z.string().trim().max(30).nullable().optional(),
+  carburant: z
+    .enum(["ESSENCE", "DIESEL", "HYBRIDE", "ELECTRIQUE"])
+    .nullable()
+    .optional(),
+  nbPlaces: z.number().int().min(1).max(30).nullable().optional(),
+  kilometrage: z.number().int().min(0).optional(),
+  segmentParc: z.enum(["LCD", "LLD", "LEASING", "IMPRO", "AUTRE"]).optional(),
+  groupeGeolocalisation: z.string().trim().max(80).nullable().optional(),
+  centreId: z.number().int().positive().nullable().optional(),
+  dateMiseEnService: z.string().trim().max(25).nullable().optional(),
+  dateEntreeParc: z.string().trim().max(25).nullable().optional(),
+  dateSortieParc: z.string().trim().max(25).nullable().optional(),
+  prixAchat: z.number().min(0).nullable().optional(),
+  dateAchat: z.string().trim().max(25).nullable().optional(),
+  prixVente: z.number().min(0).nullable().optional(),
+  dateProchaineVisiteTechnique: z.string().trim().max(25).nullable().optional(),
+  dateExpirationAssurance: z.string().trim().max(25).nullable().optional(),
+  observation: z.string().trim().max(255).nullable().optional(),
+  categorieId: z.number().int().positive().nullable().optional(),
 })
 
 const reservationStatusSchema = z.object({
@@ -138,28 +175,40 @@ const RESERVATION_CSV_HEADERS = [
   "Statut de la facturation",
 ]
 
-function parseLocationCsvDate(value: string, endOfDay = false): string | null {
-  const text = value.trim()
-  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  const year = match ? Number(match[3]) : isoMatch ? Number(isoMatch[1]) : NaN
-  const month = match ? Number(match[2]) : isoMatch ? Number(isoMatch[2]) : NaN
-  const day = match ? Number(match[1]) : isoMatch ? Number(isoMatch[3]) : NaN
-  const date = new Date(Date.UTC(year, month - 1, day))
+function parseLocationCsvTime(value: string, endOfDay = false): string | null {
+  const text = value
+    .normalize("NFKC")
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim()
+  if (!text) return endOfDay ? "23:59:59" : "00:00:00"
+
+  if (/^(?:0(?:\.\d+)?|0?\.\d+)$/.test(text)) {
+    const serial = Number(text)
+    const seconds = Math.min(86_399, Math.round(serial * 86_400))
+    const hour = Math.floor(seconds / 3_600)
+    const minute = Math.floor((seconds % 3_600) / 60)
+    const second = seconds % 60
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`
+  }
+
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i)
+  if (!match) return null
+
+  let hour = Number(match[1])
+  const minute = Number(match[2])
+  const second = Number(match[3] ?? "0")
+  const meridiem = match[4]?.toUpperCase()
 
   if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
+    minute > 59 ||
+    second > 59 ||
+    (meridiem ? hour < 1 || hour > 12 : hour > 23)
   ) {
     return null
   }
+  if (meridiem) hour = (hour % 12) + (meridiem === "PM" ? 12 : 0)
 
-  const time = endOfDay ? "T23:59:59" : "T00:00:00"
-  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}${time}`
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`
 }
 
 function parseLocationCsvStatus(
@@ -205,9 +254,12 @@ function clientNameKey(name: string): string {
   return normalizeCsvName(name)
 }
 
-type ParsedLocationCsvRow = Omit<LocationInput, "clientId"> & {
+type ParsedLocationCsvRow = Omit<LocationInput, "clientId" | "vehiculeId"> & {
   clientId: number | null
   clientName: string
+  vehiculeId: number | null
+  immatriculation: string
+  line: number
 }
 
 function parseLocationCsv(
@@ -263,7 +315,6 @@ function parseLocationCsv(
       ({ values }) =>
         !normalizeCsvLookup(get(values, "NOMDUCLIENT")).startsWith("EXEMPLE"),
     )
-
   if (rowsWithLine.length === 0) {
     throw badRequest("Le fichier ne contient aucune location à importer.")
   }
@@ -303,7 +354,7 @@ function parseLocationCsv(
 
   const errors: string[] = []
   const inputs: ParsedLocationCsvRow[] = []
-  const importedVehicles = new Map<number, Array<{
+  const importedVehicles = new Map<string, Array<{
     debut: string
     fin: string
     line: number
@@ -312,23 +363,37 @@ function parseLocationCsv(
     const rowErrors: string[] = []
     const clientName = get(values, "NOMDUCLIENT")
     const registration = get(values, "IMMATVEHICULE")
+    const rawStartDate = get(values, "DEBUT")
+    const rawStartTime =
+      get(values, "HEUREDEDEPART") || get(values, "HEUREDEPART")
+    const rawEndDate = get(values, "FIN")
+    const rawEndTime =
+      get(values, "HEUREDERETOUR") || get(values, "HEURERETOUR")
     const clientId = clientsByName.get(clientNameKey(clientName))
     const vehicle = vehiclesByRegistration.get(
       registration.replace(/[^a-z0-9]/gi, "").toUpperCase(),
     )
-    const start = parseLocationCsvDate(get(values, "DEBUT"))
-    const end = parseLocationCsvDate(get(values, "FIN"), true)
+    const normalizedRegistration = registration
+      .replace(/[^a-z0-9]/gi, "")
+      .toUpperCase()
+    const startDate = parseCsvDate(rawStartDate)
+    const startTime = parseLocationCsvTime(rawStartTime)
+    const endDate = parseCsvDate(rawEndDate)
+    const endTime = parseLocationCsvTime(rawEndTime, true)
+    const start =
+      startDate && startTime ? `${startDate.slice(0, 10)}T${startTime}` : null
+    const end = endDate && endTime ? `${endDate.slice(0, 10)}T${endTime}` : null
     const rawAmount = get(values, "MONTANT")
     const amount = parseLocationCsvAmount(rawAmount)
     const modePaiement = get(values, "MODEDEPAIEMENT")
     const referenceFacture = get(values, "REFFACTURE")
     const rawInvoiceDate = get(values, "DATEFACTURATION")
     const invoiceDate = rawInvoiceDate
-      ? (parseLocationCsvDate(rawInvoiceDate)?.slice(0, 10) ?? null)
+      ? (parseCsvDate(rawInvoiceDate)?.slice(0, 10) ?? null)
       : null
     const rawPaymentDate = get(values, "DATEDEPAIEMENT")
     const paymentDate = rawPaymentDate
-      ? (parseLocationCsvDate(rawPaymentDate)?.slice(0, 10) ?? null)
+      ? (parseCsvDate(rawPaymentDate)?.slice(0, 10) ?? null)
       : null
     const rawPaid = normalizeCsvLookup(get(values, "PAYE"))
     const paid =
@@ -357,12 +422,25 @@ function parseLocationCsv(
       rowErrors.push("nom du client limité à 150 caractères")
     }
     if (!registration) rowErrors.push("immatriculation obligatoire")
-    else if (!vehicle)
-      rowErrors.push(`véhicule « ${registration} » introuvable`)
-    if (!start) rowErrors.push("date de début invalide (JJ/MM/AAAA)")
-    if (!end) rowErrors.push("date de fin invalide (JJ/MM/AAAA)")
-    if (start && end && end < start) {
-      rowErrors.push("la date de fin précède la date de début")
+    else if (!vehicle && !normalizedRegistration) {
+      rowErrors.push("immatriculation invalide")
+    }
+    if (!startDate) rowErrors.push("date de début invalide (JJ/MM/AAAA)")
+    if (rawStartTime && !startTime) {
+      rowErrors.push("heure de départ invalide (HH:MM)")
+    }
+    if (!endDate) rowErrors.push("date de fin invalide (JJ/MM/AAAA)")
+    if (rawEndTime && !endTime) {
+      rowErrors.push("heure de retour invalide (HH:MM)")
+    }
+    if (start && end && end <= start) {
+      rowErrors.push(
+        `retour (${rawEndDate}${
+          rawEndTime ? ` ${rawEndTime}` : ""
+        }) avant départ (${rawStartDate}${
+          rawStartTime ? ` ${rawStartTime}` : ""
+        })`,
+      )
     }
     if (amount === null) rowErrors.push("montant invalide")
     if (modePaiement.length > 80) {
@@ -398,24 +476,28 @@ function parseLocationCsv(
       continue
     }
 
-    const previous = importedVehicles.get(vehicle!.id) ?? []
-    if (
-      previous.some(
-        (candidate) => candidate.debut <= end! && start! <= candidate.fin,
-      )
-    ) {
+    const vehicleKey = vehicle
+      ? `parc:${vehicle.id}`
+      : `sous-location:${normalizedRegistration}`
+    const previous = importedVehicles.get(vehicleKey) ?? []
+    const overlappingRow = previous.find(
+      (candidate) => candidate.debut < end! && start! < candidate.fin,
+    )
+    if (overlappingRow) {
       errors.push(
-        `Ligne ${line} : chevauchement avec une autre ligne importée.`,
+        `Ligne ${line} : chevauchement avec la ligne ${overlappingRow.line}.`,
       )
       continue
     }
 
     previous.push({ debut: start!, fin: end!, line })
-    importedVehicles.set(vehicle!.id, previous)
+    importedVehicles.set(vehicleKey, previous)
     inputs.push({
       clientId: clientId ?? null,
       clientName,
-      vehiculeId: vehicle!.id,
+      vehiculeId: vehicle?.id ?? null,
+      immatriculation: registration,
+      line,
       commercialId,
       type: type!,
       dateDebut: start!,
@@ -443,7 +525,7 @@ function parseLocationCsv(
 }
 
 function parseReservationCsvDate(value: string): string | null {
-  const parsed = parseLocationCsvDate(value)
+  const parsed = parseCsvDate(value)
   return parsed?.slice(0, 10) ?? null
 }
 
@@ -928,8 +1010,8 @@ const reservationSchema = z
     ({ dateDepart, dateFin }) =>
       !dateDepart || !dateFin || dateFin >= dateDepart,
     {
-    message: "La date de fin doit être après ou égale à la date de départ",
-    path: ["dateFin"],
+      message: "La date de fin doit être après ou égale à la date de départ",
+      path: ["dateFin"],
     },
   )
 
@@ -958,7 +1040,8 @@ const reservationUpdateSchema = z
     ({ dateDepart, dateFin }) =>
       !dateDepart || !dateFin || dateFin >= dateDepart,
     {
-      message: "La date de retour doit être après ou égale à la date de départ.",
+      message:
+        "La date de retour doit être après ou égale à la date de départ.",
       path: ["dateFin"],
     },
   )
@@ -1062,11 +1145,42 @@ export function listsRouter(repos: Repositories, env: Env): Router {
   })
 
   const locationSchema = locationSchemaBase.superRefine((value, context) => {
-      if (value.statut === "TERMINEE" && value.kmRetour == null) {
+    if (value.statut === "TERMINEE" && value.kmRetour == null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["kmRetour"],
+        message:
+          "Le kilométrage de retour est obligatoire pour une location terminée.",
+      })
+    }
+  })
+
+  const sousLocationUpdateSchema = z
+    .object({
+      reference: z.string().trim().min(1).max(30).nullable(),
+      clientId: z.number().int().positive(),
+      commercialId: z.number().int().positive().nullable(),
+      type: z.enum(["Courte durée", "Longue durée"]),
+      dateDebut: z.string().trim().min(10).max(25),
+      dateFin: z.string().trim().min(10).max(25),
+      montant: z.number().min(0),
+      statut: z.enum(["EN_COURS", "TERMINEE", "EN_RETARD", "EN_PROLONGATION"]),
+      observation: z.string().trim().max(255).nullable(),
+      modePaiement: z.string().trim().max(80).nullable(),
+      referenceFacture: z.string().trim().max(30).nullable(),
+      dateFacturation: z.string().trim().max(25).nullable(),
+      paye: z.boolean().nullable(),
+      payeImport: z.string().max(10).nullable(),
+      datePaiement: z.string().trim().max(25).nullable(),
+    })
+    .superRefine((value, context) => {
+      const start = Date.parse(value.dateDebut.replace(" ", "T"))
+      const end = Date.parse(value.dateFin.replace(" ", "T"))
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ["kmRetour"],
-          message: "Le kilométrage de retour est obligatoire pour une location terminée.",
+          path: ["dateFin"],
+          message: "La date/heure de retour doit être après le départ.",
         })
       }
     })
@@ -1523,7 +1637,8 @@ export function listsRouter(repos: Repositories, env: Env): Router {
           `La réservation est autorisée uniquement pour un véhicule au statut ENTREE_PARC, RETOUR_LOCATION, RETOUR_GARAGE ou RETOUR_INTERNE. Statut actuel : ${vehicle.statut}.`,
         )
       }
-      if (input.clientId !== null && !client) throw notFound("Client introuvable")
+      if (input.clientId !== null && !client)
+        throw notFound("Client introuvable")
       if (input.commercialId !== null && !commercial) {
         throw notFound("Commercial introuvable ou désactivé")
       }
@@ -1531,10 +1646,7 @@ export function listsRouter(repos: Repositories, env: Env): Router {
         throw conflict(`Véhicule au garage : ${maintenance[0]!.motif}`)
       }
       try {
-        const updated = await repos.reservations.update(
-          id,
-          input,
-        )
+        const updated = await repos.reservations.update(id, input)
         if (!updated) throw notFound("Réservation introuvable")
         res.json(updated)
       } catch (error) {
@@ -1570,61 +1682,149 @@ export function listsRouter(repos: Repositories, env: Env): Router {
   )
 
   router.post(
-    "/locations/import-csv",
-
+    "/locations/import-csv/preview",
     [...guard, validateBody(locationCsvSchema)],
-
     asyncHandler(async (req, res) => {
-      const [clients, vehicles, commercials] = await Promise.all([
-        repos.clients.fiches(),
-        repos.vehicules.list(),
-        repos.commerciaux.fiches(),
-      ])
-      const inputs = parseLocationCsv(
-        req.body.csv,
-        clients,
-        vehicles,
-        commercials,
-      )
-      const errors: string[] = []
-
-      for (const [index, input] of inputs.entries()) {
-        const line = Number(input.reference?.split("-").at(-1)) || index + 2
-        const vehicle = vehicles.find((item) => item.id === input.vehiculeId)
-        if (
-          input.statut !== "TERMINEE" &&
-          vehicle &&
-          !canStartVehicleOperation(vehicle.statut)
-        ) {
-          errors.push(
-            `Ligne ${line} : location impossible, statut du véhicule ${vehicle.statut}.`,
-          )
-        }
-        const [overlapping, maintenance] = await Promise.all([
-          repos.locations.overlapping(
-            input.vehiculeId,
-            input.dateDebut,
-            input.dateFin,
-          ),
-          repos.maintenances.overlapping(
-            input.vehiculeId,
-            input.dateDebut,
-            input.dateFin,
-          ),
+      const { csv } = locationCsvSchema.parse(req.body)
+      const [clients, vehicles, sousLocationVehicles, commercials] =
+        await Promise.all([
+          repos.clients.fiches(),
+          repos.vehicules.list(),
+          repos.sousLocations.listVehicles(),
+          repos.commerciaux.fiches(),
         ])
-
-        if (overlapping.length > 0) {
-          errors.push(
-            `Ligne ${line} : le véhicule est déjà réservé sur cette période.`,
-          )
-        }
-        if (maintenance.length > 0) {
-          errors.push(
-            `Ligne ${line} : véhicule au garage (${maintenance[0]!.motif}).`,
-          )
+      const inputs = parseLocationCsv(csv, clients, vehicles, commercials)
+      const existingSousLocations = new Set(
+        sousLocationVehicles.map((vehicle) =>
+          vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+        ),
+      )
+      const unknownRegistrations = new Map<string, string>()
+      for (const input of inputs) {
+        const key = input.immatriculation
+          .replace(/[^a-z0-9]/gi, "")
+          .toUpperCase()
+        if (
+          input.vehiculeId === null &&
+          !existingSousLocations.has(key) &&
+          !unknownRegistrations.has(key)
+        ) {
+          unknownRegistrations.set(key, input.immatriculation.trim())
         }
       }
 
+      res.json({ unknownRegistrations: [...unknownRegistrations.values()] })
+    }),
+  )
+
+  router.post(
+    "/locations/import-csv",
+    [...guard, validateBody(locationImportSchema)],
+    asyncHandler(async (req, res) => {
+      const { csv, sousLocationImmatriculations } = locationImportSchema.parse(
+        req.body,
+      )
+      const [clients, vehicles, sousLocationVehicles, commercials] =
+        await Promise.all([
+          repos.clients.fiches(),
+          repos.vehicules.list(),
+          repos.sousLocations.listVehicles(),
+          repos.commerciaux.fiches(),
+        ])
+      const inputs = parseLocationCsv(csv, clients, vehicles, commercials)
+      const existingSousLocationsByRegistration = new Map(
+        sousLocationVehicles.map((vehicle) => [
+          vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+          vehicle,
+        ]),
+      )
+      const unknownRegistrations = new Map<string, string>()
+      for (const input of inputs) {
+        const key = input.immatriculation
+          .replace(/[^a-z0-9]/gi, "")
+          .toUpperCase()
+        if (
+          input.vehiculeId === null &&
+          !existingSousLocationsByRegistration.has(key)
+        ) {
+          unknownRegistrations.set(key, input.immatriculation.trim())
+        }
+      }
+      const selectedSousLocations = new Set(
+        sousLocationImmatriculations.map((registration) =>
+          registration.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+        ),
+      )
+      const invalidSelections = [...selectedSousLocations].filter(
+        (registration) => !unknownRegistrations.has(registration),
+      )
+      if (invalidSelections.length > 0) {
+        throw badRequest(
+          "La confirmation contient une immatriculation absente des véhicules à classer.",
+        )
+      }
+      const vehiclesToAddToFleet = [...unknownRegistrations.entries()]
+        .filter(([registration]) => !selectedSousLocations.has(registration))
+        .map(([, registration]) => registration)
+      if (vehiclesToAddToFleet.length > 0) {
+        throw conflict(
+          `Import refusé : enregistrez d’abord le(s) véhicule(s) suivant(s) dans le parc, puis relancez l’import : ${vehiclesToAddToFleet.join(", ")}.`,
+        )
+      }
+
+      const errors: string[] = []
+      for (const input of inputs) {
+        if (input.vehiculeId !== null) {
+          const vehicle = vehicles.find((item) => item.id === input.vehiculeId)
+          if (
+            input.statut !== "TERMINEE" &&
+            vehicle &&
+            !canStartVehicleOperation(vehicle.statut)
+          ) {
+            errors.push(
+              `Ligne ${input.line} : location impossible, statut du véhicule ${vehicle.statut}.`,
+            )
+          }
+          const [overlapping, maintenance] = await Promise.all([
+            repos.locations.overlapping(
+              input.vehiculeId,
+              input.dateDebut,
+              input.dateFin,
+            ),
+            repos.maintenances.overlapping(
+              input.vehiculeId,
+              input.dateDebut,
+              input.dateFin,
+            ),
+          ])
+          if (overlapping.length > 0) {
+            errors.push(
+              `Ligne ${input.line} : le véhicule est déjà réservé sur cette période.`,
+            )
+          }
+          if (maintenance.length > 0) {
+            errors.push(
+              `Ligne ${input.line} : véhicule au garage (${maintenance[0]!.motif}).`,
+            )
+          }
+        } else {
+          const vehicle = existingSousLocationsByRegistration.get(
+            input.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+          )
+          if (vehicle) {
+            const overlapping = await repos.sousLocations.overlapping(
+              vehicle.id,
+              input.dateDebut,
+              input.dateFin,
+            )
+            if (overlapping.length > 0) {
+              errors.push(
+                `Ligne ${input.line} : le véhicule de sous-location est déjà loué sur cette période.`,
+              )
+            }
+          }
+        }
+      }
       if (errors.length > 0) {
         throw conflict(
           `Import annulé : ${errors.length} conflit(s).\n${errors.slice(0, 20).join("\n")}`,
@@ -1640,47 +1840,364 @@ export function listsRouter(repos: Repositories, env: Env): Router {
           }
         }
       }
-
       const createdClientIds = new Map<string, number>()
       for (const [key, name] of missingClients) {
         const client = await repos.clients.create(
-          {
-            nom: name,
-            type: "Particulier",
-            telephone: "",
-          },
+          { nom: name, type: "Particulier", telephone: "" },
           req.user!.id,
         )
         createdClientIds.set(key, client.id)
       }
 
-      const created = []
+      const sousLocationIds = new Map(
+        sousLocationVehicles.map((vehicle) => [
+          vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+          vehicle.id,
+        ]),
+      )
+      let createdFleetLocations = 0
+      let createdSousLocations = 0
       for (const input of inputs) {
-        const { clientName, ...locationInput } = input
         const clientId =
-          input.clientId ?? createdClientIds.get(clientNameKey(clientName))
+          input.clientId ??
+          createdClientIds.get(clientNameKey(input.clientName))
         if (clientId === undefined) {
-          throw new Error(`Client « ${clientName} » introuvable après création`)
+          throw new Error(
+            `Client « ${input.clientName} » introuvable après création`,
+          )
         }
 
-        try {
-          created.push(
+        if (input.vehiculeId !== null) {
+          try {
             await repos.locations.create(
-              { ...locationInput, clientId },
+              {
+                reference: input.reference,
+                clientId,
+                vehiculeId: input.vehiculeId,
+                commercialId: input.commercialId,
+                type: input.type,
+                dateDebut: input.dateDebut,
+                dateFin: input.dateFin,
+                montant: input.montant,
+                statut: input.statut,
+                observation: input.observation,
+                modePaiement: input.modePaiement,
+                referenceFacture: input.referenceFacture,
+                dateFacturation: input.dateFacturation,
+                paye: input.paye,
+                payeImport: input.payeImport,
+                datePaiement: input.datePaiement,
+              },
               req.user!.id,
-            ),
-          )
-        } catch (error) {
-          if (error instanceof AvailabilityConflictError) {
-            throw conflict(`Import interrompu : ${error.message}`)
+            )
+            createdFleetLocations += 1
+          } catch (error) {
+            if (error instanceof AvailabilityConflictError) {
+              throw conflict(`Import interrompu : ${error.message}`)
+            }
+            throw error
           }
-          throw error
+        } else {
+          const registrationKey = input.immatriculation
+            .replace(/[^a-z0-9]/gi, "")
+            .toUpperCase()
+          let vehicleId = sousLocationIds.get(registrationKey)
+          if (vehicleId === undefined) {
+            vehicleId = await repos.sousLocations.createVehicle(
+              unknownRegistrations.get(registrationKey) ??
+                input.immatriculation.trim(),
+              req.user!.id,
+            )
+            sousLocationIds.set(registrationKey, vehicleId)
+          }
+          await repos.sousLocations.create(
+            {
+              reference: input.reference,
+              clientId,
+              vehiculeSousLocationId: vehicleId,
+              commercialId: input.commercialId ?? null,
+              type: input.type,
+              dateDebut: input.dateDebut,
+              dateFin: input.dateFin,
+              dateRetourReelle:
+                input.statut === "TERMINEE" ? input.dateFin : null,
+              montant: input.montant ?? 0,
+              statut: input.statut ?? "EN_COURS",
+              observation: input.observation,
+              modePaiement: input.modePaiement,
+              referenceFacture: input.referenceFacture,
+              dateFacturation: input.dateFacturation,
+              paye: input.paye,
+              payeImport: input.payeImport,
+              datePaiement: input.datePaiement,
+            },
+            req.user!.id,
+          )
+          createdSousLocations += 1
         }
       }
 
-      res
-        .status(201)
-        .json({ created: created.length, clientsCreated: missingClients.size })
+      res.status(201).json({
+        created: createdFleetLocations + createdSousLocations,
+        fleetLocationsCreated: createdFleetLocations,
+        sousLocationsCreated: createdSousLocations,
+        clientsCreated: missingClients.size,
+      })
+    }),
+  )
+
+  router.get(
+    "/sous-locations/vehicules",
+    guard,
+    asyncHandler(async (req, res) => {
+      const { q, limit } = paginationSchema.parse(req.query)
+      const rows = await repos.sousLocations.listVehicles()
+      const needle = (q ?? "").trim().toLowerCase()
+      const filtered = needle
+        ? rows.filter((vehicle) =>
+            `${vehicle.immatriculation} ${vehicle.marque ?? ""} ${vehicle.modele ?? ""} ${vehicle.statut}`
+              .toLowerCase()
+              .includes(needle),
+          )
+        : rows
+      res.json(limit ? filtered.slice(0, limit) : filtered)
+    }),
+  )
+
+  router.post(
+    "/sous-locations/vehicules",
+    [...guard, validateBody(sousLocationVehicleSchema)],
+    asyncHandler(async (req, res) => {
+      const input = sousLocationVehicleSchema.parse(req.body)
+      const vehicles = await repos.sousLocations.listVehicles()
+      const fleetVehicles = await repos.vehicules.list()
+      const normalizedRegistration = input.immatriculation
+        .replace(/[^a-z0-9]/gi, "")
+        .toUpperCase()
+      if (
+        fleetVehicles.some(
+          (vehicle) =>
+            vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase() ===
+            normalizedRegistration,
+        )
+      ) {
+        throw conflict(
+          "Cette immatriculation appartient déjà au parc automobile",
+        )
+      }
+      if (
+        vehicles.some(
+          (vehicle) =>
+            vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase() ===
+            input.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+        )
+      ) {
+        throw conflict("Immatriculation déjà enregistrée")
+      }
+      if (Boolean(input.marque) !== Boolean(input.modele)) {
+        throw badRequest("Renseignez la marque et le modèle ensemble.")
+      }
+      if (
+        input.marque &&
+        input.modele &&
+        !(await repos.modeles.list()).some(
+          (model) =>
+            model.marque === input.marque && model.nom === input.modele,
+        )
+      ) {
+        throw notFound("Modèle introuvable dans le référentiel.")
+      }
+      if (
+        input.categorieId &&
+        !(await repos.categories.get(input.categorieId))
+      ) {
+        throw notFound("Catégorie introuvable")
+      }
+      if (input.centreId && !(await repos.centres.get(input.centreId))) {
+        throw notFound("Centre introuvable")
+      }
+      try {
+        res
+          .status(201)
+          .json(
+            await repos.sousLocations.createVehicleRecord(input, req.user!.id),
+          )
+      } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          throw conflict("Immatriculation ou numéro de châssis déjà enregistré")
+        }
+        throw error
+      }
+    }),
+  )
+
+  router.put(
+    "/sous-locations/vehicules/:id",
+    [...guard, validateBody(sousLocationVehicleSchema.partial())],
+    asyncHandler(async (req, res) => {
+      const id = idParam(req.params.id)
+      const input = sousLocationVehicleSchema.partial().parse(req.body)
+      const current = (await repos.sousLocations.listVehicles()).find(
+        (vehicle) => vehicle.id === id,
+      )
+      if (!current) throw notFound("Véhicule de sous-location introuvable")
+      const nextImmatriculation =
+        input.immatriculation ?? current.immatriculation
+      const allVehicles = await repos.sousLocations.listVehicles()
+      const normalizedRegistration = nextImmatriculation
+        .replace(/[^a-z0-9]/gi, "")
+        .toUpperCase()
+      const currentNormalizedRegistration = current.immatriculation
+        .replace(/[^a-z0-9]/gi, "")
+        .toUpperCase()
+      if (
+        normalizedRegistration !== currentNormalizedRegistration &&
+        (await repos.vehicules.list()).some(
+          (vehicle) =>
+            vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase() ===
+            normalizedRegistration,
+        )
+      ) {
+        throw conflict(
+          "Cette immatriculation appartient déjà au parc automobile",
+        )
+      }
+      if (
+        allVehicles.some(
+          (vehicle) =>
+            vehicle.id !== id &&
+            vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase() ===
+              nextImmatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+        )
+      ) {
+        throw conflict("Immatriculation déjà enregistrée")
+      }
+      const nextMarque =
+        input.marque === undefined ? (current.marque ?? null) : input.marque
+      const nextModele =
+        input.modele === undefined ? (current.modele ?? null) : input.modele
+      if (Boolean(nextMarque) !== Boolean(nextModele)) {
+        throw badRequest("Renseignez la marque et le modèle ensemble.")
+      }
+      if (
+        nextMarque &&
+        nextModele &&
+        !(await repos.modeles.list()).some(
+          (model) => model.marque === nextMarque && model.nom === nextModele,
+        )
+      ) {
+        throw notFound("Modèle introuvable dans le référentiel.")
+      }
+      if (
+        input.categorieId &&
+        !(await repos.categories.get(input.categorieId))
+      ) {
+        throw notFound("Catégorie introuvable")
+      }
+      if (input.centreId && !(await repos.centres.get(input.centreId))) {
+        throw notFound("Centre introuvable")
+      }
+      try {
+        const updated = await repos.sousLocations.updateVehicle(id, input)
+        if (!updated) throw notFound("Véhicule de sous-location introuvable")
+        res.json(updated)
+      } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          throw conflict("Immatriculation ou numéro de châssis déjà enregistré")
+        }
+        throw error
+      }
+    }),
+  )
+
+  router.delete(
+    "/sous-locations/vehicules/:id",
+    guard,
+    asyncHandler(async (req, res) => {
+      const id = idParam(req.params.id)
+      if (
+        !(await repos.sousLocations.listVehicles()).some(
+          (vehicle) => vehicle.id === id,
+        )
+      ) {
+        throw notFound("Véhicule de sous-location introuvable")
+      }
+      try {
+        if (!(await repos.sousLocations.removeVehicle(id))) {
+          throw conflict(
+            "Ce véhicule est lié à des sous-locations ou à des mouvements et ne peut pas être supprimé.",
+          )
+        }
+      } catch (error) {
+        if (isForeignKeyError(error)) {
+          throw conflict(
+            "Ce véhicule est lié à des sous-locations ou à des mouvements et ne peut pas être supprimé.",
+          )
+        }
+        throw error
+      }
+      res.status(204).end()
+    }),
+  )
+
+  router.put(
+    "/locations/sous-locations/:id",
+    [...guard, validateBody(sousLocationUpdateSchema)],
+    asyncHandler(async (req, res) => {
+      const id = idParam(req.params.id)
+      const input = sousLocationUpdateSchema.parse(req.body)
+      const current = (await repos.sousLocations.list()).find(
+        (location) => location.id === id,
+      )
+      if (!current) throw notFound("Sous-location introuvable")
+
+      const [client, commercial] = await Promise.all([
+        repos.clients.get(input.clientId),
+        input.commercialId
+          ? repos.commerciaux.get(input.commercialId)
+          : Promise.resolve(null),
+      ])
+      if (!client) throw notFound("Client introuvable")
+      if (input.commercialId && !commercial) {
+        throw notFound("Commercial introuvable ou désactivé")
+      }
+
+      const overlaps = await repos.sousLocations.overlapping(
+        current.vehiculeSousLocationId,
+        input.dateDebut,
+        input.dateFin,
+      )
+      if (
+        input.statut !== "TERMINEE" &&
+        overlaps.some((location) => location.id !== id)
+      ) {
+        throw conflict(
+          "Le véhicule de sous-location est déjà loué sur cette période.",
+        )
+      }
+
+      let updated: Awaited<ReturnType<Repositories["sousLocations"]["update"]>>
+      try {
+        updated = await repos.sousLocations.update(id, input)
+      } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          throw conflict("Cette référence de location est déjà utilisée.")
+        }
+        throw error
+      }
+      if (!updated) throw notFound("Sous-location introuvable")
+      res.json(updated)
+    }),
+  )
+
+  router.delete(
+    "/locations/sous-locations/:id",
+    guard,
+    asyncHandler(async (req, res) => {
+      if (!(await repos.sousLocations.remove(idParam(req.params.id)))) {
+        throw notFound("Sous-location introuvable")
+      }
+      res.status(204).end()
     }),
   )
 
@@ -1820,17 +2337,57 @@ export function listsRouter(repos: Repositories, env: Env): Router {
   bind(
     "/locations",
 
-    async (q, limit) => repos.locations.fiches(limit).then((rows) => {
-        const needle = (q ?? "").trim().toLowerCase()
-
-        return needle
-          ? rows.filter((r) =>
-              `${r.reference} ${r.client} ${r.vehicule} ${r.statut}`
-                .toLowerCase()
-                .includes(needle),
-            )
-          : rows
-      }),
+    async (q, limit) => {
+      const [rows, sousLocations, clients] = await Promise.all([
+        repos.locations.fiches(),
+        repos.sousLocations.list(),
+        repos.clients.fiches(),
+      ])
+      const clientNames = new Map(
+        clients.map((client) => [client.id, client.nom]),
+      )
+      const combined = [
+        ...rows,
+        ...sousLocations.map((location) => ({
+          id: location.id,
+          reference: location.reference,
+          clientId: location.clientId,
+          vehiculeId: null,
+          vehiculeSousLocationId: location.vehiculeSousLocationId,
+          commercialId: location.commercialId,
+          type: location.type,
+          dateDebut: location.dateDebut,
+          dateFin: location.dateFin,
+          dateRetourReelle: location.dateRetourReelle ?? null,
+          kmDepart: 0,
+          kmRetour: null,
+          kmParcourus: null,
+          montant: location.montant,
+          statut: location.statut,
+          observation: location.observation,
+          modePaiement: location.modePaiement,
+          referenceFacture: location.referenceFacture,
+          dateFacturation: location.dateFacturation,
+          paye: location.paye,
+          payeImport: location.payeImport,
+          datePaiement: location.datePaiement,
+          client: clientNames.get(location.clientId) ?? "Client introuvable",
+          vehicule: location.immatriculation,
+          isSousLocation: true,
+          immatriculation: location.immatriculation,
+          sousLocationId: location.id,
+        })),
+      ]
+      const needle = (q ?? "").trim().toLowerCase()
+      const filtered = needle
+        ? combined.filter((row) =>
+            `${row.reference} ${row.client} ${row.vehicule} ${row.statut}`
+              .toLowerCase()
+              .includes(needle),
+          )
+        : combined
+      return limit ? filtered.slice(0, limit) : filtered
+    },
 
     (id) => repos.locations.get(id),
 
@@ -1850,8 +2407,7 @@ export function listsRouter(repos: Repositories, env: Env): Router {
       const nextStatus = req.body.statut ?? current.statut
       const newActiveAssignment =
         nextStatus !== "TERMINEE" &&
-        (current.statut === "TERMINEE" ||
-          nextVehicleId !== current.vehiculeId)
+        (current.statut === "TERMINEE" || nextVehicleId !== current.vehiculeId)
 
       if (newActiveAssignment) {
         const vehicle = await repos.vehicules.get(nextVehicleId)
@@ -1933,13 +2489,23 @@ export function listsRouter(repos: Repositories, env: Env): Router {
     guard,
 
     asyncHandler(async (req, res) => {
-      if (await repos.ventesVehicules.isMovementLinked(Number(req.params.id))) {
+      const movementId = Number(req.params.id)
+      const movement = (await repos.mouvements.list()).find(
+        (item) => item.id === movementId,
+      )
+      if (movement?.sousLocationId != null) {
+        throw conflict(
+          "Un mouvement lié à une sous-location ne peut pas être supprimé séparément",
+        )
+      }
+
+      if (await repos.ventesVehicules.isMovementLinked(movementId)) {
         throw conflict(
           "Un mouvement lié à une vente ou une location ne peut pas être supprimé séparément",
         )
       }
 
-      const removed = await repos.mouvements.remove(Number(req.params.id))
+      const removed = await repos.mouvements.remove(movementId)
 
       if (!removed) throw notFound("Mouvement introuvable")
 
@@ -2022,7 +2588,35 @@ export function listsRouter(repos: Repositories, env: Env): Router {
 
       if (!fiche) throw notFound("Client introuvable")
 
-      res.json({ ...fiche, locations: await repos.locations.forClient(id) })
+      const [locations, sousLocations] = await Promise.all([
+        repos.locations.forClient(id),
+        repos.sousLocations.list(),
+      ])
+      const clientSousLocations = sousLocations
+        .filter((location) => location.clientId === id)
+        .map((location) => ({
+          id: location.id,
+          reference: location.reference,
+          clientId: location.clientId,
+          vehiculeId: null,
+          commercialId: location.commercialId,
+          type: location.type,
+          dateDebut: location.dateDebut,
+          dateFin: location.dateFin,
+          montant: location.montant,
+          statut: location.statut,
+          observation: location.observation,
+          client: fiche.nom,
+          vehicule: location.immatriculation,
+          isSousLocation: true,
+        }))
+
+      res.json({
+        ...fiche,
+        locations: [...locations, ...clientSousLocations].sort((a, b) =>
+          b.dateDebut.localeCompare(a.dateDebut),
+        ),
+      })
     }),
   )
 

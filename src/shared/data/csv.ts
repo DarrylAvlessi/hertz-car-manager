@@ -97,7 +97,10 @@ export async function downloadXlsx(
   URL.revokeObjectURL(url)
 }
 
-export async function readCsvFile(file: File): Promise<string> {
+export async function readCsvFile(
+  file: File,
+  options: { preserveExcelDateDisplay?: boolean } = {},
+): Promise<string> {
   const buffer = await file.arrayBuffer()
 
   if (file.name.toLowerCase().endsWith(".xlsx")) {
@@ -115,16 +118,92 @@ export async function readCsvFile(file: File): Promise<string> {
     }
 
     const rows: string[][] = []
+    const formatDate = (date: Date, numberFormat: string) => {
+      const format = numberFormat
+        .replace(/\[[^\]]+\]/g, "")
+        .replace(/"[^"]*"|\\.|_.|\*./g, "")
+        .toLowerCase()
+      const dateTokens = format.match(/[dmy]+/g) ?? []
+      const dayIndex = dateTokens.findIndex((token) => token.startsWith("d"))
+      const monthIndex = dateTokens.findIndex((token) => token.startsWith("m"))
+      const dayFirst =
+        !options.preserveExcelDateDisplay ||
+        dayIndex < 0 ||
+        monthIndex < 0 ||
+        dayIndex < monthIndex
+      const first = dayFirst ? date.getUTCDate() : date.getUTCMonth() + 1
+      const second = dayFirst ? date.getUTCMonth() + 1 : date.getUTCDate()
+      const firstToken = dateTokens.find((token) =>
+        token.startsWith(dayFirst ? "d" : "m"),
+      )
+      const secondToken = dateTokens.find((token) =>
+        token.startsWith(dayFirst ? "m" : "d"),
+      )
+      const formatPart = (value: number, token?: string) =>
+        token && token.length > 1
+          ? String(value).padStart(2, "0")
+          : String(value)
+
+      return `${formatPart(first, firstToken)}/${formatPart(second, secondToken)}/${date.getUTCFullYear()}`
+    }
+    const formatTime = (date: Date) =>
+      `${String(date.getUTCHours()).padStart(2, "0")}:${String(
+        date.getUTCMinutes(),
+      ).padStart(2, "0")}:${String(date.getUTCSeconds()).padStart(2, "0")}`
+
     worksheet.eachRow({ includeEmpty: false }, (row) => {
       const values: string[] = []
       row.eachCell({ includeEmpty: true }, (cell, column) => {
-        const value = cell.value
-        values[column - 1] =
-          value instanceof Date
-            ? `${String(value.getUTCDate()).padStart(2, "0")}/${String(
-                value.getUTCMonth() + 1,
-              ).padStart(2, "0")}/${value.getUTCFullYear()}`
-            : cell.text
+        const format = (cell.numFmt ?? "")
+          .replace(/"[^"]*"|\\.|_.|\*./g, "")
+          .toLowerCase()
+        const hasTimeFormat = /[hs]/.test(format)
+        const hasDateFormat = /[dy]/.test(format) || (!hasTimeFormat && /m/.test(format))
+        const cellValue = cell.value
+        const value =
+          cellValue !== null &&
+          typeof cellValue === "object" &&
+          "result" in cellValue
+            ? cellValue.result
+            : cellValue
+        const isDateValue =
+          value instanceof Date ||
+          Object.prototype.toString.call(value) === "[object Date]"
+
+        if (isDateValue) {
+          const date = value as Date
+          values[column - 1] =
+            hasTimeFormat && !hasDateFormat
+              ? formatTime(date)
+              : hasTimeFormat
+                ? `${formatDate(date, cell.numFmt ?? "")} ${formatTime(date)}`
+                : formatDate(date, cell.numFmt ?? "")
+        } else if (
+          (typeof value === "number" ||
+            (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value))) &&
+          hasDateFormat
+        ) {
+          values[column - 1] = formatDate(
+            new Date(
+              Date.UTC(1899, 11, 30) +
+                Math.floor(Number(value)) * 86_400_000,
+            ),
+            cell.numFmt ?? "",
+          )
+        } else if (
+          (typeof value === "number" ||
+            (typeof value === "string" && /^(?:0(?:\.\d+)?|0?\.\d+)$/.test(value))) &&
+          hasTimeFormat &&
+          Number(value) >= 0 &&
+          Number(value) < 1
+        ) {
+          const seconds = Math.min(86_399, Math.round(Number(value) * 86_400))
+          values[column - 1] = formatTime(
+            new Date(Date.UTC(1899, 11, 30) + seconds * 1_000),
+          )
+        } else {
+          values[column - 1] = cell.text
+        }
       })
       rows.push(values)
     })

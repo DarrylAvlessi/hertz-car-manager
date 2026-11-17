@@ -123,7 +123,15 @@ function progressColors(values: number[]): string[] {
 }
 
 const money = (value: number) =>
-  `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 }).format(value)} F CFA`
+  `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 2 }).format(value)} F CFA`
+const reportRevenue = (value: number) =>
+  Math.abs(value) < 1_000_000
+    ? money(value)
+    : `${new Intl.NumberFormat("fr-FR", {
+        maximumFractionDigits: 8,
+      }).format(value / 1_000_000)} M F CFA`
+const revenueFromMillions = (value: number) =>
+  reportRevenue(value * 1_000_000)
 const percent = (value: number, precision = 1) =>
   `${new Intl.NumberFormat("fr-FR", {
     minimumFractionDigits: precision,
@@ -219,6 +227,7 @@ function ReportCard({
 
 export default function StatisticsPage() {
   const [period, setPeriod] = useState<DatePeriod>("all")
+  const [scope, setScope] = useState<"parc" | "sous-location">("parc")
   const [segment, setSegment] = useState("LCD")
   const [agencyId, setAgencyId] = useState("")
   const [agencies, setAgencies] = useState<AgencyOption[]>([])
@@ -236,12 +245,15 @@ export default function StatisticsPage() {
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
 
   const query = useMemo(() => {
-    const params = new URLSearchParams({ segment })
+    const params = new URLSearchParams({ scope })
+    if (scope === "parc") {
+      params.set("segment", segment)
+    }
     if (agencyId) params.set("agenceId", agencyId)
     if (debut) params.set("debut", debut)
     if (fin) params.set("fin", fin)
     return params.toString()
-  }, [agencyId, debut, fin, segment])
+  }, [agencyId, debut, fin, scope, segment])
 
   useEffect(() => {
     let active = true
@@ -310,7 +322,10 @@ export default function StatisticsPage() {
       return
     }
 
-    const params = new URLSearchParams({ segment })
+    const params = new URLSearchParams({ scope })
+    if (scope === "parc") {
+      params.set("segment", segment)
+    }
     if (agencyId) params.set("agenceId", agencyId)
     if (pdfStartDate && pdfEndDate) {
       params.set("debut", pdfStartDate)
@@ -363,14 +378,23 @@ export default function StatisticsPage() {
     ...month,
     locationsCurve: month.locations,
   }))
-  const summarySubtitles = [
+  const summarySubtitles = scope === "sous-location"
+    ? [
+        "CA total des sous-locations",
+        "Contrats de sous-location démarrés",
+        "Jours loués",
+        "Jours loués / jours-véhicules de sous-location",
+        "Locations par véhicule de sous-location",
+        "Immobilisation non suivie pour ce périmètre",
+      ]
+    : [
     "CA total sur la période",
     "Contrats démarrés",
     "Jours-véhicules du parc",
     "Jours loués / jours disponibles du parc",
     "Locations par véhicule",
     "Jours perdus en garage ou sinistre",
-  ]
+      ]
 
   return (
     <main className="statistics-page">
@@ -383,17 +407,30 @@ export default function StatisticsPage() {
           <DatePeriodFilter value={period} onChange={setPeriod} />
           <select
             className="secondary status-filter"
-            aria-label="Périmètre du parc"
-            value={segment}
-            onChange={(event) => setSegment(event.target.value)}
+            aria-label="Source du rapport statistique"
+            value={scope}
+            onChange={(event) =>
+              setScope(event.target.value as "parc" | "sous-location")
+            }
           >
-            <option value="LCD">Location courte durée (LCD)</option>
-            <option value="LLD">Location longue durée (LLD)</option>
-            <option value="LEASING">Leasing</option>
-            <option value="IMPRO">Impro</option>
-            <option value="AUTRE">Autre</option>
-            <option value="ALL">Tous les segments</option>
+            <option value="parc">Parc automobile</option>
+            <option value="sous-location">Sous-locations (hors parc)</option>
           </select>
+          {scope === "parc" && (
+            <select
+              className="secondary status-filter"
+              aria-label="Périmètre du parc"
+              value={segment}
+              onChange={(event) => setSegment(event.target.value)}
+            >
+              <option value="LCD">Location courte durée (LCD)</option>
+              <option value="LLD">Location longue durée (LLD)</option>
+              <option value="LEASING">Leasing</option>
+              <option value="IMPRO">Impro</option>
+              <option value="AUTRE">Autre</option>
+              <option value="ALL">Tous les segments</option>
+            </select>
+          )}
           <select
             className="secondary status-filter"
             aria-label="Agence"
@@ -408,7 +445,7 @@ export default function StatisticsPage() {
             ))}
           </select>
           <button className="primary small" type="button" onClick={exportPdf}>
-            Imprimer le bilan PDF
+            Visualiser / télécharger PDF
           </button>
         </div>
       </section>
@@ -474,7 +511,7 @@ export default function StatisticsPage() {
                   <YAxis yAxisId="cumule" orientation="right" tickFormatter={(value) => `${value} M`} tick={{ fontSize: 10 }} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    formatter={(value, name) => [`${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} M F CFA`, name === "caMillions" ? "CA mensuel" : "CA cumulé"]}
+                    formatter={(value, name) => [revenueFromMillions(Number(value)), name === "caMillions" ? "CA mensuel" : "CA cumulé"]}
                   />
                   <Legend formatter={(value) => value === "caMillions" ? "CA mensuel" : "CA cumulé"} />
                   <Bar yAxisId="ca" dataKey="caMillions" name="caMillions">
@@ -512,7 +549,7 @@ export default function StatisticsPage() {
                   <CartesianGrid stroke={SERIES.grid} horizontal={false} />
                   <XAxis type="number" tickFormatter={(value) => `${value} M`} tick={{ fontSize: 10 }} />
                   <YAxis type="category" dataKey="name" width={125} tick={{ fontSize: 10 }} />
-                  <Tooltip formatter={(value) => `${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} M F CFA`} contentStyle={tooltipStyle} />
+                  <Tooltip formatter={(value) => revenueFromMillions(Number(value))} contentStyle={tooltipStyle} />
                   <Bar dataKey="value">
                     {progressColors(report.ca_categories.map(([, value]) => value)).map((fill, index) => (
                       <Cell key={report.ca_categories[index]![0]} fill={fill} />
@@ -529,7 +566,7 @@ export default function StatisticsPage() {
                   <CartesianGrid stroke={SERIES.grid} horizontal={false} />
                   <XAxis type="number" tickFormatter={(value) => `${value} M`} tick={{ fontSize: 10 }} />
                   <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 9 }} />
-                  <Tooltip formatter={(value) => `${Number(value).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} M F CFA`} contentStyle={tooltipStyle} />
+                  <Tooltip formatter={(value) => revenueFromMillions(Number(value))} contentStyle={tooltipStyle} />
                   <Bar dataKey="revenue">
                     {progressColors(vehicleRevenue.map((vehicle) => vehicle.revenue)).map((fill, index) => (
                       <Cell key={vehicleRevenue[index]!.name} fill={fill} />
@@ -550,9 +587,9 @@ export default function StatisticsPage() {
               headers={["Mois", "Locations", "Jours loués", "CA court", "CA long", "CA total", "Panier moyen", "Évol."]}
               rows={[
                 ...report.ca_mensuel_table.map(([month, count, days, short, long, total, basket, evolution]) => [
-                  month, integer(count), integer(days), integer(short), integer(long), integer(total), integer(basket), evolution,
+                  month, integer(count), integer(days), money(short), money(long), money(total), money(basket), evolution,
                 ]),
-                ["TOTAL", integer(report.summary.locations), integer(report.summary.joursLoues), integer(report.split_ca[0]?.[1] ?? 0), integer(report.split_ca[1]?.[1] ?? 0), integer(report.summary.ca), integer(report.summary.panierMoyen), ""],
+                ["TOTAL", integer(report.summary.locations), integer(report.summary.joursLoues), money(report.split_ca[0]?.[1] ?? 0), money(report.split_ca[1]?.[1] ?? 0), money(report.summary.ca), money(report.summary.panierMoyen), ""],
               ]}
             />
           </ReportCard>
@@ -579,7 +616,11 @@ export default function StatisticsPage() {
         <div className="statistics-section-heading">
           <span>RAPPORT 02</span>
           <h2>Utilisation et immobilisation</h2>
-          <p>Jours loués, immobilisations garage/sinistre et disponibilité du parc.</p>
+          <p>
+            {scope === "sous-location"
+              ? "Jours loués et disponibilité des véhicules de sous-location. Les immobilisations ne sont pas suivies dans ce périmètre."
+              : "Jours loués, immobilisations garage/sinistre et disponibilité du parc."}
+          </p>
         </div>
         <div className="statistics-chart-grid">
           <ReportCard title="Taux d’utilisation mensuel" description="Jours loués ÷ jours-véhicules présents">
@@ -596,7 +637,14 @@ export default function StatisticsPage() {
               </ResponsiveContainer>
             </div>
           </ReportCard>
-          <ReportCard title="Répartition des jours-véhicules" description="Part louée, immobilisée et disponible non louée">
+          <ReportCard
+            title="Répartition des jours-véhicules"
+            description={
+              scope === "sous-location"
+                ? "Part louée et disponible non louée. Les immobilisations ne sont pas suivies."
+                : "Part louée, immobilisée et disponible non louée"
+            }
+          >
             <div className="statistics-chart">
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={utilizationDistribution} margin={chartMargin}>
@@ -606,7 +654,9 @@ export default function StatisticsPage() {
                   <Tooltip formatter={(value, name) => percent(Number(value), name === "immobilized" ? 3 : 1)} contentStyle={tooltipStyle} />
                   <Legend />
                   <Bar dataKey="rented" stackId="days" name="Loués" fill={SERIES.green} />
-                  <Bar dataKey="immobilized" stackId="days" name="Immobilisés" fill={SERIES.red} />
+                  {scope === "parc" && (
+                    <Bar dataKey="immobilized" stackId="days" name="Immobilisés" fill={SERIES.red} />
+                  )}
                   <Bar dataKey="available" stackId="days" name="Disponibles non loués" fill={SERIES.yellow} />
                 </BarChart>
               </ResponsiveContainer>
@@ -641,7 +691,11 @@ export default function StatisticsPage() {
       <section className="statistics-report-section" id="rotation">
         <div className="statistics-section-heading">
           <span>RAPPORT 03</span>
-          <h2>Rotation du parc</h2>
+          <h2>
+            {scope === "sous-location"
+              ? "Rotation des véhicules de sous-location"
+              : "Rotation du parc"}
+          </h2>
           <p>Nombre de locations par véhicule, durée moyenne et lecture mensuelle.</p>
         </div>
         <div className="statistics-chart-grid">
@@ -698,7 +752,15 @@ export default function StatisticsPage() {
           </ReportCard>
           <ReportCard title="Tableau de bord mensuel" description="Les taux de période sont recalculés à partir des totaux">
             <Table
-              headers={["Mois", "Véhicules (moy.)", "Locations", "Rotation", "Durée moy. (j)", "Utilisation", "Immobilisation"]}
+              headers={[
+                "Mois",
+                "Véhicules (moy.)",
+                "Locations",
+                "Rotation",
+                "Durée moy. (j)",
+                "Utilisation",
+                scope === "sous-location" ? "Immobilisation (non suivie)" : "Immobilisation",
+              ]}
               rows={[
                 ...report.tb_mensuel.map(([month, vehicles, count, rotation, duration, utilization, immobilization]) => [
                   month, vehicles, integer(count), rotation, duration, utilization, immobilization,
@@ -719,7 +781,11 @@ export default function StatisticsPage() {
         <ReportCard title="Comment lire les indicateurs">
           <Table headers={["Indicateur", "Formule", "Précisions"]} rows={report.definitions} />
           <ul className="statistics-caveats">
-            <li>Les taux d’utilisation et de rotation ne s’interprètent que sur le segment sélectionné, LCD par défaut.</li>
+            <li>
+              {scope === "sous-location"
+                ? "Les indicateurs portent exclusivement sur les véhicules et contrats de sous-location, sans inclure le parc automobile."
+                : "Les taux d’utilisation et de rotation ne s’interprètent que sur le segment sélectionné, LCD par défaut."}
+            </li>
             <li>Le mois en cours est calculé jusqu’à la date d’édition du rapport.</li>
             <li>Les chiffres reposent sur les saisies de la base ; une location non enregistrée ou un retour non daté peut fausser les indicateurs.</li>
           </ul>
@@ -741,7 +807,13 @@ export default function StatisticsPage() {
             <p className="stats-eyebrow">PARAMÈTRES DU RAPPORT</p>
             <h2 id="stats-pdf-period-title">Choisir la période du PDF</h2>
             <p className="stats-pdf-period-description">
-              Sélectionnez les dates à inclure. Laissez les deux champs vides pour utiliser la période par défaut du bilan. Le rapport conservera le segment et l’agence sélectionnés.
+              Sélectionnez les dates à inclure. Laissez les deux champs vides pour utiliser la période par défaut du bilan.
+              {scope === "sous-location"
+                ? " Le PDF ne contiendra que les sous-locations."
+                : " Le rapport conservera le segment et l’agence sélectionnés."}
+              {agencyId
+                ? " Le filtre agence est appliqué aux contrats via le commercial associé."
+                : ""}
             </p>
             <div className="stats-pdf-date-fields">
               <label>
@@ -800,7 +872,11 @@ export default function StatisticsPage() {
             <header className="stats-pdf-toolbar">
               <div>
                 <p className="stats-eyebrow">HERTZ BÉNIN</p>
-                <h2>Bilan statistique PDF</h2>
+                <h2>
+                  {scope === "sous-location"
+                    ? "Bilan des sous-locations PDF"
+                    : "Bilan statistique PDF"}
+                </h2>
               </div>
               <div className="stats-pdf-actions">
                 <a

@@ -13,6 +13,7 @@ import ReferenceCrudPage from "./ReferenceCrudPage"
 import MovementsPage from "./MovementsPage"
 
 import VehiclePage from "./VehiclePage"
+import SousLocationVehiclesPage from "./SousLocationVehiclesPage"
 
 import GaragesPage from "./GaragesPage"
 
@@ -62,6 +63,10 @@ export const CommerciauxRoute = makeTableRoute("Commerciaux")
 
 export function VehiculesRoute() {
   return <VehiclePage />
+}
+
+export function VehiculesSousLocationRoute() {
+  return <SousLocationVehiclesPage />
 }
 
 export function LocationsRoute() {

@@ -18,6 +18,7 @@
     "db:migrate-sale-timestamps": "tsx src/db/migrateSaleTimestamps.ts",
     "db:migrate-internal-exits": "tsx src/db/migrateInternalExits.ts",
     "db:migrate-admin-roles": "tsx src/db/migrateAdminRoles.ts",
+    "db:migrate-sous-locations": "tsx src/db/migrateSousLocations.ts",
     "db:import-parc": "tsx src/db/import-parc.ts"
   },
   "dependencies": {

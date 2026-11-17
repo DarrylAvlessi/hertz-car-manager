@@ -42,6 +42,11 @@ import type {
   LocationFiche,
   LocationInput,
   LocationRepo,
+  SousLocation,
+  SousLocationInput,
+  SousLocationRepo,
+  SousLocationVehicle,
+  SousLocationVehicleInput,
   Prolongation,
   ProlongationInput,
   ProlongationRepo,
@@ -933,6 +938,11 @@ class MemoryClientRepo implements ClientRepo {
 
         .map((l) => l.dateFin)
 
+        .concat(
+          this.data.sousLocations
+            .filter((location) => location.clientId === c.id)
+            .map((location) => location.dateFin),
+        )
         .sort()
 
       return {
@@ -1045,6 +1055,9 @@ class MemoryCommercialRepo implements CommercialRepo {
         const conclues = this.data.locations.filter(
           (l) => l.commercialId === c.id,
         )
+        const sousLocations = this.data.sousLocations.filter(
+          (location) => location.commercialId === c.id,
+        )
         const reservationsConclues = this.data.reservations.filter(
           (r) => r.commercialId === c.id && r.statut !== "Annulée",
         ).length
@@ -1057,7 +1070,10 @@ class MemoryCommercialRepo implements CommercialRepo {
           (sale) => sale.commercialId === c.id && sale.statut === "CONCLUE",
         ).length
 
-        const chiffreAffaires = conclues.reduce((sum, l) => sum + l.montant, 0)
+        const chiffreAffaires = [
+          ...conclues,
+          ...sousLocations,
+        ].reduce((sum, location) => sum + location.montant, 0)
 
         const agence = this.data.agences.find((item) => item.id === c.agenceId)
 
@@ -1068,7 +1084,7 @@ class MemoryCommercialRepo implements CommercialRepo {
 
           codeAgence: agence?.code ?? null,
 
-          locationsConclues: conclues.length,
+          locationsConclues: conclues.length + sousLocations.length,
 
           reservationsConclues,
 
@@ -1078,7 +1094,7 @@ class MemoryCommercialRepo implements CommercialRepo {
 
           chiffreAffaires,
 
-          performance: performanceOf(conclues.length),
+          performance: performanceOf(conclues.length + sousLocations.length),
         }
       })
   }
@@ -1676,12 +1692,335 @@ class MemoryLocationRepo implements LocationRepo {
   ): Promise<Location[]> {
     await this.refreshStatuses()
 
+    const normalizeBoundary = (value: string, isEnd = false) => {
+      const normalized = value.replace(" ", "T")
+      return normalized.length === 10
+        ? `${normalized}T${isEnd ? "23:59:59" : "00:00:00"}`
+        : normalized
+    }
+    const requestedStart = normalizeBoundary(debut)
+    const requestedEnd = normalizeBoundary(fin, true)
+
     return this.data.locations.filter(
       (l) =>
         l.vehiculeId === vehiculeId &&
         ACTIVE_LOCATION.includes(l.statut) &&
-        overlaps(l.dateDebut, l.dateFin, debut, fin),
+        normalizeBoundary(l.dateDebut) < requestedEnd &&
+        requestedStart < normalizeBoundary(l.dateFin, true),
     )
+  }
+}
+
+class MemorySousLocationRepo implements SousLocationRepo {
+  constructor(private data: SeedData) {}
+
+  private addRentalMovements(location: SousLocation): void {
+    const departureId =
+      Math.max(0, ...this.data.mouvements.map((item) => item.id)) + 1
+    const departure: Mouvement = {
+      id: departureId,
+      vehiculeId: null,
+      vehiculeSousLocationId: location.vehiculeSousLocationId,
+      sousLocationId: location.id,
+      immatriculation: location.immatriculation,
+      type: "MISE_EN_LOCATION",
+      motif: "LOCATION",
+      kilometrage: null,
+      date: location.dateDebut,
+      dateRetour: location.dateRetourReelle ?? null,
+      commentaire: `Sous-location ${location.reference}`,
+    }
+    this.data.mouvements.push(departure)
+    if (location.statut === "TERMINEE") {
+      this.data.mouvements.push({
+        ...departure,
+        id: departureId + 1,
+        type: "RETOUR_LOCATION",
+        date: location.dateRetourReelle ?? location.dateFin,
+        dateRetour: null,
+      })
+    }
+    const vehicle = this.data.sousLocationVehicles.find(
+      (item) => item.id === location.vehiculeSousLocationId,
+    )
+    if (vehicle) {
+      vehicle.statut =
+        location.statut === "TERMINEE" ? "RETOUR_LOCATION" : "MISE_EN_LOCATION"
+    }
+  }
+
+  async listVehicles(): Promise<SousLocationVehicle[]> {
+    return this.data.sousLocationVehicles.map((vehicle) => ({ ...vehicle }))
+  }
+
+  async createVehicle(immatriculation: string, adminId = 1): Promise<number> {
+    return (
+      await this.createVehicleRecord({ immatriculation }, adminId)
+    ).id
+  }
+
+  async createVehicleRecord(
+    input: SousLocationVehicleInput,
+    _adminId: number,
+  ): Promise<SousLocationVehicle> {
+    const normalized = input.immatriculation
+      .replace(/[^a-z0-9]/gi, "")
+      .toUpperCase()
+    const existing = this.data.sousLocationVehicles.find(
+      (vehicle) =>
+        vehicle.immatriculation.replace(/[^a-z0-9]/gi, "").toUpperCase() ===
+        normalized,
+    )
+    if (existing) throw new Error("Immatriculation déjà enregistrée")
+
+    const vehicle: SousLocationVehicle = {
+      id:
+        Math.max(0, ...this.data.sousLocationVehicles.map((item) => item.id)) +
+        1,
+      immatriculation: input.immatriculation.trim(),
+      marque: input.marque,
+      modele: input.modele,
+      marqueModele: [input.marque, input.modele].filter(Boolean).join(" "),
+      categorie:
+        this.data.categories.find(
+          (category) => category.id === input.categorieId,
+        )?.libelle ?? null,
+      version: input.version ?? null,
+      annee: input.annee ?? null,
+      numeroChassis: input.numeroChassis ?? null,
+      couleur: input.couleur ?? null,
+      carburant: input.carburant ?? null,
+      nbPlaces: input.nbPlaces ?? null,
+      kilometrage: input.kilometrage ?? 0,
+      segmentParc: input.segmentParc ?? "LCD",
+      groupeGeolocalisation: input.groupeGeolocalisation ?? null,
+      centreId: input.centreId ?? null,
+      centre:
+        this.data.centres.find((centre) => centre.id === input.centreId)?.nom ??
+        null,
+      dateMiseEnService: input.dateMiseEnService ?? null,
+      dateEntreeParc: input.dateEntreeParc ?? null,
+      dateSortieParc: input.dateSortieParc ?? null,
+      prixAchat: input.prixAchat ?? null,
+      dateAchat: input.dateAchat ?? null,
+      prixVente: input.prixVente ?? null,
+      statut: "ENTREE_PARC",
+      dateProchaineVisiteTechnique: input.dateProchaineVisiteTechnique ?? null,
+      dateExpirationAssurance: input.dateExpirationAssurance ?? null,
+      observation: input.observation ?? null,
+      categorieId: input.categorieId ?? null,
+    }
+    this.data.sousLocationVehicles.push(vehicle)
+    return { ...vehicle }
+  }
+
+  async updateVehicle(
+    id: number,
+    input: Partial<SousLocationVehicleInput>,
+  ): Promise<SousLocationVehicle | null> {
+    const vehicle = this.data.sousLocationVehicles.find((item) => item.id === id)
+    if (!vehicle) return null
+    if (input.immatriculation) {
+      const normalized = input.immatriculation
+        .replace(/[^a-z0-9]/gi, "")
+        .toUpperCase()
+      if (
+        this.data.sousLocationVehicles.some(
+          (item) =>
+            item.id !== id &&
+            item.immatriculation
+              .replace(/[^a-z0-9]/gi, "")
+              .toUpperCase() === normalized,
+        )
+      ) {
+        throw new Error("Immatriculation déjà enregistrée")
+      }
+    }
+    Object.assign(vehicle, input)
+    if (input.immatriculation) vehicle.immatriculation = input.immatriculation.trim()
+    if (input.immatriculation) {
+      for (const movement of this.data.mouvements) {
+        if (movement.vehiculeSousLocationId === id) {
+          movement.immatriculation = vehicle.immatriculation
+        }
+      }
+    }
+    if (input.marque !== undefined || input.modele !== undefined) {
+      vehicle.marqueModele = [vehicle.marque, vehicle.modele]
+        .filter(Boolean)
+        .join(" ")
+    }
+    if (input.centreId !== undefined) {
+      vehicle.centre =
+        this.data.centres.find((centre) => centre.id === input.centreId)?.nom ??
+        null
+    }
+    if (input.categorieId !== undefined) {
+      vehicle.categorie =
+        this.data.categories.find(
+          (category) => category.id === input.categorieId,
+        )?.libelle ?? null
+    }
+    return { ...vehicle }
+  }
+
+  async removeVehicle(id: number): Promise<boolean> {
+    const index = this.data.sousLocationVehicles.findIndex(
+      (vehicle) => vehicle.id === id,
+    )
+    if (
+      index < 0 ||
+      this.data.sousLocations.some(
+        (location) => location.vehiculeSousLocationId === id,
+      ) ||
+      this.data.mouvements.some(
+        (movement) => movement.vehiculeSousLocationId === id,
+      )
+    ) {
+      return false
+    }
+    this.data.sousLocationVehicles.splice(index, 1)
+    return true
+  }
+
+  async list(): Promise<SousLocation[]> {
+    return this.data.sousLocations.map((location) => ({ ...location }))
+  }
+
+  async create(
+    input: SousLocationInput,
+    _adminId: number,
+  ): Promise<SousLocation> {
+    const vehicle = this.data.sousLocationVehicles.find(
+      (item) => item.id === input.vehiculeSousLocationId,
+    )
+    if (!vehicle) throw new Error("Véhicule de sous-location introuvable")
+
+    const location: SousLocation = {
+      ...input,
+      id: Math.max(0, ...this.data.sousLocations.map((item) => item.id)) + 1,
+      reference:
+        input.reference?.trim() ||
+        `SLOC-${String(Date.now()).slice(-5)}`,
+      immatriculation: vehicle.immatriculation,
+      dateRetourReelle:
+        input.dateRetourReelle ??
+        (input.statut === "TERMINEE" ? input.dateFin : null),
+    }
+    this.data.sousLocations.push(location)
+    this.addRentalMovements(location)
+    return { ...location }
+  }
+
+  async update(
+    id: number,
+    input: Partial<SousLocationInput>,
+  ): Promise<SousLocation | null> {
+    const index = this.data.sousLocations.findIndex(
+      (location) => location.id === id,
+    )
+    if (index < 0) return null
+    const current = this.data.sousLocations[index]!
+    const updated = {
+      ...current,
+      ...input,
+      dateRetourReelle:
+        input.dateRetourReelle !== undefined
+          ? input.dateRetourReelle
+          : input.statut === "TERMINEE"
+            ? current.dateRetourReelle ?? input.dateFin ?? current.dateFin
+            : null,
+      reference:
+        input.reference === null
+          ? ""
+          : (input.reference ?? current.reference),
+    }
+    this.data.sousLocations[index] = updated
+    const departure = this.data.mouvements.find(
+      (movement) =>
+        movement.sousLocationId === id &&
+        movement.type === "MISE_EN_LOCATION",
+    )
+    if (departure) {
+      departure.date = updated.dateDebut
+      departure.dateRetour = updated.dateRetourReelle ?? null
+      departure.commentaire = `Sous-location ${updated.reference}`
+      const returnIndex = this.data.mouvements.findIndex(
+        (movement) =>
+          movement.sousLocationId === id &&
+          movement.type === "RETOUR_LOCATION",
+      )
+      if (updated.statut === "TERMINEE" && returnIndex < 0) {
+        this.data.mouvements.push({
+          ...departure,
+          id: Math.max(0, ...this.data.mouvements.map((item) => item.id)) + 1,
+          type: "RETOUR_LOCATION",
+          date: updated.dateRetourReelle ?? updated.dateFin,
+          dateRetour: null,
+        })
+      } else if (updated.statut !== "TERMINEE" && returnIndex >= 0) {
+        this.data.mouvements.splice(returnIndex, 1)
+      } else if (returnIndex >= 0) {
+        this.data.mouvements[returnIndex]!.date =
+          updated.dateRetourReelle ?? updated.dateFin
+      }
+    }
+    const vehicle = this.data.sousLocationVehicles.find(
+      (item) => item.id === updated.vehiculeSousLocationId,
+    )
+    if (vehicle) {
+      vehicle.statut =
+        updated.statut === "TERMINEE" ? "RETOUR_LOCATION" : "MISE_EN_LOCATION"
+    }
+    return { ...updated }
+  }
+
+  async overlapping(
+    vehiculeSousLocationId: number,
+    debut: string,
+    fin: string,
+  ): Promise<SousLocation[]> {
+    const normalizeBoundary = (value: string, isEnd = false) => {
+      const normalized = value.replace(" ", "T")
+      return normalized.length === 10
+        ? `${normalized}T${isEnd ? "23:59:59" : "00:00:00"}`
+        : normalized
+    }
+    const requestedStart = normalizeBoundary(debut)
+    const requestedEnd = normalizeBoundary(fin, true)
+
+    return this.data.sousLocations.filter(
+      (location) =>
+        location.vehiculeSousLocationId === vehiculeSousLocationId &&
+        ACTIVE_LOCATION.includes(location.statut) &&
+        normalizeBoundary(location.dateDebut) < requestedEnd &&
+        requestedStart < normalizeBoundary(location.dateFin, true),
+    )
+  }
+
+  async remove(id: number): Promise<boolean> {
+    const index = this.data.sousLocations.findIndex(
+      (location) => location.id === id,
+    )
+    if (index < 0) return false
+    const location = this.data.sousLocations[index]!
+    this.data.sousLocations.splice(index, 1)
+    this.data.mouvements = this.data.mouvements.filter(
+      (movement) => movement.sousLocationId !== id,
+    )
+    const vehicle = this.data.sousLocationVehicles.find(
+      (item) => item.id === location.vehiculeSousLocationId,
+    )
+    if (vehicle) {
+      vehicle.statut = this.data.sousLocations.some(
+        (item) =>
+          item.vehiculeSousLocationId === vehicle.id &&
+          ACTIVE_LOCATION.includes(item.statut),
+      )
+        ? "MISE_EN_LOCATION"
+        : "RETOUR_LOCATION"
+    }
+    return true
   }
 }
 
@@ -3060,6 +3399,8 @@ export async function memoryRepositories(): Promise<Repositories> {
     commerciaux: new MemoryCommercialRepo(data),
 
     locations: new MemoryLocationRepo(data),
+
+    sousLocations: new MemorySousLocationRepo(data),
 
     prolongations: new MemoryProlongationRepo(data),
 

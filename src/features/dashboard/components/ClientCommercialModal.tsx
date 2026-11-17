@@ -672,7 +672,7 @@ export default function ClientCommercialModal({
                 <dd>{client.adresse || "—"}</dd>
               </div>
               <div>
-                <dt>Nombre de locations</dt>
+                <dt>Locations (parc et sous-location)</dt>
                 <dd>{client.locationsCount}</dd>
               </div>
               <div>
@@ -702,10 +702,16 @@ export default function ClientCommercialModal({
                     </thead>
                     <tbody>
                       {client.locations.map((location) => (
-                        <tr key={location.id}>
+                        <tr
+                          key={`${location.isSousLocation ? "sous-location" : "parc"}-${location.id}`}
+                        >
                           <td>{location.reference}</td>
                           <td>{location.vehicule}</td>
-                          <td>{location.type}</td>
+                          <td>
+                            {location.isSousLocation
+                              ? `Sous-location · ${location.type}`
+                              : location.type}
+                          </td>
                           <td>
                             {dateLabel(location.dateDebut)} –{" "}
                             {dateLabel(location.dateFin)}
@@ -768,7 +774,7 @@ export default function ClientCommercialModal({
             </dl>
             <div className="client-commercial-metrics">
               <article>
-                <p>Locations conclues</p>
+                <p>Locations conclues (parc et sous-location)</p>
                 <strong>{commercial.locationsConclues}</strong>
               </article>
               <article>

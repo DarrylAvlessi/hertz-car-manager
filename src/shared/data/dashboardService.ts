@@ -107,7 +107,7 @@ export interface LocationFicheDto {
 
   vehicule: string
 
-  vehiculeId?: number
+  vehiculeId?: number | null
 
   type: string
 
@@ -118,6 +118,8 @@ export interface LocationFicheDto {
   montant?: number
 
   statut: string
+
+  isSousLocation?: boolean
 }
 
 export interface ReservationFicheDto {

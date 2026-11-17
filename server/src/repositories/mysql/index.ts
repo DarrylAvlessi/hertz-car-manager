@@ -45,6 +45,11 @@ import type {
   LocationFiche,
   LocationRepo,
   LocationInput,
+  SousLocation,
+  SousLocationInput,
+  SousLocationRepo,
+  SousLocationVehicle,
+  SousLocationVehicleInput,
   Prolongation,
   ProlongationInput,
   ProlongationRepo,
@@ -2293,12 +2298,19 @@ class MysqlClientRepo implements ClientRepo {
               c.nom AS nom_famille, c.prenom,
               c.type_client AS type, c.telephone, c.email, c.adresse,
               c.num_permis,
-              COUNT(l.id_location) AS locations_count,
-              MAX(l.date_fin_prevue) AS derniere
+              COALESCE(rental_summary.locations_count, 0) AS locations_count,
+              rental_summary.derniere
          FROM client c
-         LEFT JOIN location l ON l.id_client = c.id_client
-        GROUP BY c.id_client, c.nom, c.prenom, c.type_client, c.telephone,
-                 c.email, c.adresse, c.num_permis
+         LEFT JOIN (
+           SELECT rentals.id_client, COUNT(*) AS locations_count,
+                  MAX(rentals.date_fin_prevue) AS derniere
+             FROM (
+               SELECT id_client, date_fin_prevue FROM location
+               UNION ALL
+               SELECT id_client, date_fin_prevue FROM sous_location
+             ) rentals
+            GROUP BY rentals.id_client
+         ) rental_summary ON rental_summary.id_client = c.id_client
         ORDER BY c.id_client`,
     )
 
@@ -2482,8 +2494,14 @@ class MysqlCommercialRepo implements CommercialRepo {
               a.code AS codeAgence,
               CONCAT_WS(' ', NULLIF(c.prenom, ''), c.nom) AS nom,
               c.telephone AS contact,
-              COUNT(l.id_location) AS conclues,
-              COALESCE(SUM(l.montant_total), 0) AS ca,
+              COUNT(l.id_location) +
+                (SELECT COUNT(*) FROM sous_location sl
+                  WHERE sl.id_commercial = c.id_commercial
+                    AND sl.statut <> 'ANNULEE') AS conclues,
+              COALESCE(SUM(l.montant_total), 0) +
+                COALESCE((SELECT SUM(sl.montant_total) FROM sous_location sl
+                  WHERE sl.id_commercial = c.id_commercial
+                    AND sl.statut <> 'ANNULEE'), 0) AS ca,
               (SELECT COUNT(*) FROM reservation r
                  WHERE r.id_commercial = c.id_commercial
                    AND r.statut <> 'ANNULEE') AS reservationsConclues,
@@ -3267,12 +3285,563 @@ class MysqlLocationRepo implements LocationRepo {
          FROM location
         WHERE id_vehicule = ?
           AND statut IN ('EN_COURS', 'EN_RETARD', 'EN_PROLONGATION')
-          AND date_debut <= ? AND ? <= date_fin_prevue`,
+          AND date_debut < ? AND ? < date_fin_prevue`,
 
       [vehiculeId, fin, debut],
     )
 
     return rows.map(mapLocation)
+  }
+}
+
+class MysqlSousLocationRepo implements SousLocationRepo {
+  constructor(private pool: mysql.Pool) {}
+
+  async listVehicles(): Promise<SousLocationVehicle[]> {
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT v.id_vehicule_sous_location AS id, v.immatriculation,
+              v.marque, v.modele, CONCAT_WS(' ', v.marque, v.modele) AS marque_modele,
+              c.libelle AS categorie, v.version, v.annee, v.numero_chassis,
+              v.couleur, v.carburant, v.nb_places, v.kilometrage,
+              v.segment_parc, v.groupe_geolocalisation,
+              v.id_centre AS centre_id, ctr.nom AS centre,
+              v.date_mise_en_service, v.date_entree_parc, v.date_sortie_parc,
+              v.prix_achat, v.date_achat, v.prix_vente, v.statut,
+              v.date_prochaine_visite_technique, v.date_expiration_assurance,
+              v.observation, v.id_categorie AS categorie_id
+         FROM vehicule_sous_location v
+         LEFT JOIN categorie_vehicule c ON c.id_categorie = v.id_categorie
+         LEFT JOIN centre ctr ON ctr.id_centre = v.id_centre
+        ORDER BY v.id_vehicule_sous_location`,
+    )
+    return rows.map((row) => ({
+      id: num(row.id),
+      immatriculation: str(row.immatriculation),
+      marque: strNull(row.marque) ?? undefined,
+      modele: strNull(row.modele) ?? undefined,
+      marqueModele: str(row.marque_modele),
+      categorie: strNull(row.categorie),
+      version: strNull(row.version),
+      annee: numNull(row.annee),
+      numeroChassis: strNull(row.numero_chassis),
+      couleur: strNull(row.couleur),
+      carburant: row.carburant as SousLocationVehicle["carburant"],
+      nbPlaces: numNull(row.nb_places),
+      kilometrage: num(row.kilometrage),
+      segmentParc: row.segment_parc as SousLocationVehicle["segmentParc"],
+      groupeGeolocalisation: strNull(row.groupe_geolocalisation),
+      centreId: numNull(row.centre_id),
+      centre: strNull(row.centre),
+      dateMiseEnService: row.date_mise_en_service
+        ? str(row.date_mise_en_service).slice(0, 10)
+        : null,
+      dateEntreeParc: row.date_entree_parc
+        ? str(row.date_entree_parc).slice(0, 10)
+        : null,
+      dateSortieParc: row.date_sortie_parc
+        ? str(row.date_sortie_parc).slice(0, 10)
+        : null,
+      prixAchat: numNull(row.prix_achat),
+      dateAchat: row.date_achat ? str(row.date_achat).slice(0, 10) : null,
+      prixVente: numNull(row.prix_vente),
+      statut: row.statut as SousLocationVehicle["statut"],
+      dateProchaineVisiteTechnique: row.date_prochaine_visite_technique
+        ? str(row.date_prochaine_visite_technique).slice(0, 10)
+        : null,
+      dateExpirationAssurance: row.date_expiration_assurance
+        ? str(row.date_expiration_assurance).slice(0, 10)
+        : null,
+      observation: strNull(row.observation),
+      categorieId: numNull(row.categorie_id),
+    }))
+  }
+
+  async createVehicle(immatriculation: string, adminId = 1): Promise<number> {
+    const [result] = await this.pool.query(
+      `INSERT INTO vehicule_sous_location (immatriculation, id_administrateur)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE
+         id_vehicule_sous_location = LAST_INSERT_ID(id_vehicule_sous_location)`,
+      [immatriculation.trim(), adminId],
+    )
+    return Number((result as mysql.ResultSetHeader).insertId)
+  }
+
+  async createVehicleRecord(
+    input: SousLocationVehicleInput,
+    adminId: number,
+  ): Promise<SousLocationVehicle> {
+    const [result] = await this.pool.query(
+      `INSERT INTO vehicule_sous_location
+        (immatriculation, marque, modele, version, annee, numero_chassis,
+         couleur, carburant, nb_places, kilometrage, segment_parc,
+         groupe_geolocalisation, id_centre, date_mise_en_service,
+         date_entree_parc, date_sortie_parc, prix_achat, date_achat,
+         prix_vente, date_prochaine_visite_technique,
+         date_expiration_assurance, observation, id_categorie, id_administrateur)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.immatriculation.trim(),
+        input.marque ?? null,
+        input.modele ?? null,
+        input.version ?? null,
+        input.annee ?? null,
+        input.numeroChassis ?? null,
+        input.couleur ?? null,
+        input.carburant ?? null,
+        input.nbPlaces ?? null,
+        input.kilometrage ?? 0,
+        input.segmentParc ?? "LCD",
+        input.groupeGeolocalisation ?? null,
+        input.centreId ?? null,
+        input.dateMiseEnService?.slice(0, 10) ?? null,
+        input.dateEntreeParc?.slice(0, 10) ?? null,
+        input.dateSortieParc?.slice(0, 10) ?? null,
+        input.prixAchat ?? null,
+        input.dateAchat?.slice(0, 10) ?? null,
+        input.prixVente ?? null,
+        input.dateProchaineVisiteTechnique?.slice(0, 10) ?? null,
+        input.dateExpirationAssurance?.slice(0, 10) ?? null,
+        input.observation ?? null,
+        input.categorieId ?? null,
+        adminId,
+      ],
+    )
+    const id = Number((result as mysql.ResultSetHeader).insertId)
+    const vehicle = (await this.listVehicles()).find((item) => item.id === id)
+    if (!vehicle) throw new Error("Véhicule de sous-location introuvable après création")
+    return vehicle
+  }
+
+  async updateVehicle(
+    id: number,
+    input: Partial<SousLocationVehicleInput>,
+  ): Promise<SousLocationVehicle | null> {
+    const columns: Array<[keyof SousLocationVehicleInput, string]> = [
+      ["immatriculation", "immatriculation"],
+      ["marque", "marque"],
+      ["modele", "modele"],
+      ["version", "version"],
+      ["annee", "annee"],
+      ["numeroChassis", "numero_chassis"],
+      ["couleur", "couleur"],
+      ["carburant", "carburant"],
+      ["nbPlaces", "nb_places"],
+      ["kilometrage", "kilometrage"],
+      ["segmentParc", "segment_parc"],
+      ["groupeGeolocalisation", "groupe_geolocalisation"],
+      ["centreId", "id_centre"],
+      ["dateMiseEnService", "date_mise_en_service"],
+      ["dateEntreeParc", "date_entree_parc"],
+      ["dateSortieParc", "date_sortie_parc"],
+      ["prixAchat", "prix_achat"],
+      ["dateAchat", "date_achat"],
+      ["prixVente", "prix_vente"],
+      ["dateProchaineVisiteTechnique", "date_prochaine_visite_technique"],
+      ["dateExpirationAssurance", "date_expiration_assurance"],
+      ["observation", "observation"],
+      ["categorieId", "id_categorie"],
+    ]
+    const assignments: string[] = []
+    const values: unknown[] = []
+    for (const [key, column] of columns) {
+      const value = input[key]
+      if (value === undefined) continue
+      assignments.push(`${column} = ?`)
+      values.push(
+        key.startsWith("date") && value !== null
+          ? String(value).slice(0, 10)
+          : value,
+      )
+    }
+    if (assignments.length > 0) {
+      await this.pool.query(
+        `UPDATE vehicule_sous_location
+            SET ${assignments.join(", ")}
+          WHERE id_vehicule_sous_location = ?`,
+        [...values, id],
+      )
+    }
+    return (await this.listVehicles()).find((vehicle) => vehicle.id === id) ?? null
+  }
+
+  async removeVehicle(id: number): Promise<boolean> {
+    const [result] = await this.pool.query(
+      "DELETE FROM vehicule_sous_location WHERE id_vehicule_sous_location = ?",
+      [id],
+    )
+    return Number((result as mysql.ResultSetHeader).affectedRows) > 0
+  }
+
+  async list(): Promise<SousLocation[]> {
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT l.id_sous_location AS id, l.numero_contrat AS reference,
+              l.id_client AS client_id, l.id_vehicule_sous_location AS vehicle_id,
+              v.immatriculation, l.id_commercial AS commercial_id,
+              l.type_location, l.date_debut, l.date_fin_prevue, l.montant_total,
+              l.statut, l.observation, l.mode_paiement_import,
+              l.reference_facture_import, l.date_facturation_import,
+              l.date_paiement_import, l.date_retour_reelle,
+              l.statut_paiement, l.paye_import
+         FROM sous_location l
+         JOIN vehicule_sous_location v
+           ON v.id_vehicule_sous_location = l.id_vehicule_sous_location
+        ORDER BY l.id_sous_location`,
+    )
+    return rows.map((row) => ({
+      id: num(row.id),
+      reference: str(row.reference),
+      clientId: num(row.client_id),
+      vehiculeSousLocationId: num(row.vehicle_id),
+      immatriculation: str(row.immatriculation),
+      commercialId: numNull(row.commercial_id),
+      type:
+        row.type_location === "LONGUE_DUREE"
+          ? "Longue durée"
+          : "Courte durée",
+      dateDebut: locationDateTime(row.date_debut),
+      dateFin: locationDateTime(row.date_fin_prevue),
+      dateRetourReelle: row.date_retour_reelle
+        ? locationDateTime(row.date_retour_reelle)
+        : null,
+      montant: num(row.montant_total),
+      statut: row.statut as SousLocation["statut"],
+      observation: strNull(row.observation),
+      modePaiement: strNull(row.mode_paiement_import),
+      referenceFacture: strNull(row.reference_facture_import),
+      dateFacturation: strNull(row.date_facturation_import),
+      datePaiement: strNull(row.date_paiement_import),
+      paye:
+        row.paye_import == null
+          ? row.statut_paiement === "PAYEE"
+          : ["OUI", "YES", "TRUE", "1"].includes(
+              str(row.paye_import).trim().toUpperCase(),
+            ),
+      payeImport: strNull(row.paye_import),
+    }))
+  }
+
+  async create(
+    input: SousLocationInput,
+    adminId: number,
+  ): Promise<SousLocation> {
+    const id = await inTransaction(this.pool, async (connection) => {
+      const [result] = await connection.query(
+        `INSERT INTO sous_location
+          (type_location, date_debut, date_fin_prevue, montant_total, statut,
+           statut_paiement, observation, mode_paiement_import,
+           reference_facture_import, date_facturation_import,
+           date_paiement_import, paye_import, id_client,
+           id_vehicule_sous_location, id_commercial, id_administrateur)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.type === "Longue durée" ? "LONGUE_DUREE" : "COURTE_DUREE",
+          sqlDateTime(input.dateDebut),
+          sqlDateTime(input.dateFin),
+          input.montant,
+          input.statut,
+          input.paye ? "PAYEE" : "NON_PAYEE",
+          input.observation ?? null,
+          input.modePaiement ?? null,
+          input.referenceFacture ?? null,
+          input.dateFacturation?.slice(0, 10) ?? null,
+          input.datePaiement?.slice(0, 10) ?? null,
+          input.payeImport ?? null,
+          input.clientId,
+          input.vehiculeSousLocationId,
+          input.commercialId ?? null,
+          adminId,
+        ],
+      )
+      const locationId = Number((result as mysql.ResultSetHeader).insertId)
+      if (locationId === 0) throw new Error("Sous-location non créée")
+      const reference = input.reference?.trim() || `SLOC-${locationId}`
+      await connection.query(
+        "UPDATE sous_location SET numero_contrat = ? WHERE id_sous_location = ?",
+        [reference, locationId],
+      )
+
+      const departureDate = sqlDateTime(input.dateDebut)
+      const returnDate =
+        input.dateRetourReelle ??
+        (input.statut === "TERMINEE" ? input.dateFin : null)
+      if (returnDate) {
+        await connection.query(
+          "UPDATE sous_location SET date_retour_reelle = ? WHERE id_sous_location = ?",
+          [sqlDateTime(returnDate), locationId],
+        )
+      }
+      const [departureResult] = await connection.query(
+        `INSERT INTO mouvement_vehicule
+          (type_mouvement, motif, date_mouvement, date_retour_prevue,
+           observation, id_vehicule_sous_location, id_sous_location,
+           id_commercial)
+         VALUES ('MISE_EN_LOCATION', 'LOCATION', ?, ?, ?, ?, ?, ?)`,
+        [
+          departureDate,
+          sqlDateTime(input.dateFin),
+          `Sous-location ${reference}`,
+          input.vehiculeSousLocationId,
+          locationId,
+          input.commercialId ?? null,
+        ],
+      )
+      const departureId = Number(
+        (departureResult as mysql.ResultSetHeader).insertId,
+      )
+      if (returnDate) {
+        await connection.query(
+          `INSERT INTO mouvement_vehicule
+            (type_mouvement, motif, date_mouvement, observation,
+             id_vehicule_sous_location, id_sous_location,
+             id_mouvement_depart, id_commercial)
+           VALUES ('RETOUR_LOCATION', 'LOCATION', ?, ?, ?, ?, ?, ?)`,
+          [
+            sqlDateTime(returnDate),
+            `Retour de sous-location ${reference}`,
+            input.vehiculeSousLocationId,
+            locationId,
+            departureId,
+            input.commercialId ?? null,
+          ],
+        )
+      }
+      await connection.query(
+        "UPDATE vehicule_sous_location SET statut = ? WHERE id_vehicule_sous_location = ?",
+        [
+          input.statut === "TERMINEE" ? "RETOUR_LOCATION" : "MISE_EN_LOCATION",
+          input.vehiculeSousLocationId,
+        ],
+      )
+      return locationId
+    })
+
+    const location = (await this.list()).find((item) => item.id === id)
+    if (!location) throw new Error("Sous-location introuvable après création")
+    return location
+  }
+
+  async update(
+    id: number,
+    input: Partial<SousLocationInput>,
+  ): Promise<SousLocation | null> {
+    const current = (await this.list()).find((location) => location.id === id)
+    if (!current) return null
+    await inTransaction(this.pool, async (connection) => {
+      const assignments: string[] = []
+      const values: (string | number | null)[] = []
+      const add = (column: string, value: string | number | null) => {
+        assignments.push(`${column} = ?`)
+        values.push(value)
+      }
+      if (input.reference !== undefined) {
+        add("numero_contrat", input.reference?.trim() || null)
+      }
+      if (input.clientId !== undefined) add("id_client", input.clientId)
+      if (input.commercialId !== undefined) {
+        add("id_commercial", input.commercialId)
+      }
+      if (input.type !== undefined) {
+        add(
+          "type_location",
+          input.type === "Longue durée" ? "LONGUE_DUREE" : "COURTE_DUREE",
+        )
+      }
+      if (input.dateDebut !== undefined) {
+        add("date_debut", sqlDateTime(input.dateDebut))
+      }
+      if (input.dateFin !== undefined) {
+        add("date_fin_prevue", sqlDateTime(input.dateFin))
+      }
+      if (input.montant !== undefined) add("montant_total", input.montant)
+      if (input.statut !== undefined) add("statut", input.statut)
+      if (input.observation !== undefined) {
+        add("observation", input.observation ?? null)
+      }
+      if (input.modePaiement !== undefined) {
+        add("mode_paiement_import", input.modePaiement ?? null)
+      }
+      if (input.referenceFacture !== undefined) {
+        add("reference_facture_import", input.referenceFacture ?? null)
+      }
+      if (input.dateFacturation !== undefined) {
+        add("date_facturation_import", input.dateFacturation?.slice(0, 10) ?? null)
+      }
+      if (input.paye !== undefined) {
+        add("statut_paiement", input.paye ? "PAYEE" : "NON_PAYEE")
+      }
+      if (input.payeImport !== undefined) {
+        add("paye_import", input.payeImport ?? null)
+      }
+      if (input.datePaiement !== undefined) {
+        add("date_paiement_import", input.datePaiement?.slice(0, 10) ?? null)
+      }
+      const nextStatus = input.statut ?? current.statut
+      const nextEndDate = input.dateFin ?? current.dateFin
+      const nextReturnDate =
+        input.dateRetourReelle !== undefined
+          ? input.dateRetourReelle
+          : nextStatus === "TERMINEE"
+            ? current.dateRetourReelle ?? nextEndDate
+            : null
+      if (
+        input.dateRetourReelle !== undefined ||
+        input.statut !== undefined ||
+        input.dateFin !== undefined
+      ) {
+        add(
+          "date_retour_reelle",
+          nextReturnDate ? sqlDateTime(nextReturnDate) : null,
+        )
+      }
+      if (assignments.length > 0) {
+        await connection.query(
+          `UPDATE sous_location SET ${assignments.join(", ")}
+            WHERE id_sous_location = ?`,
+          [...values, id],
+        )
+      }
+
+      const departures = await query<Row>(
+        connection,
+        `SELECT id_mouvement FROM mouvement_vehicule
+          WHERE id_sous_location = ? AND type_mouvement = 'MISE_EN_LOCATION'
+          ORDER BY id_mouvement LIMIT 1`,
+        [id],
+      )
+      const departureId = departures[0]
+        ? num(departures[0].id_mouvement)
+        : null
+      if (departureId !== null) {
+        await connection.query(
+          `UPDATE mouvement_vehicule
+              SET date_mouvement = ?, date_retour_prevue = ?, observation = ?,
+                  id_commercial = ?
+            WHERE id_mouvement = ?`,
+          [
+            sqlDateTime(input.dateDebut ?? current.dateDebut),
+            sqlDateTime(nextEndDate),
+            `Sous-location ${input.reference?.trim() || current.reference}`,
+            input.commercialId === undefined
+              ? current.commercialId
+              : input.commercialId,
+            departureId,
+          ],
+        )
+        const returns = await query<Row>(
+          connection,
+          `SELECT id_mouvement FROM mouvement_vehicule
+            WHERE id_mouvement_depart = ? AND type_mouvement = 'RETOUR_LOCATION'
+            LIMIT 1`,
+          [departureId],
+        )
+        if (nextStatus === "TERMINEE") {
+          if (returns[0]) {
+            await connection.query(
+              "UPDATE mouvement_vehicule SET date_mouvement = ? WHERE id_mouvement = ?",
+              [
+                sqlDateTime(nextReturnDate ?? nextEndDate),
+                num(returns[0].id_mouvement),
+              ],
+            )
+          } else {
+            await connection.query(
+              `INSERT INTO mouvement_vehicule
+                (type_mouvement, motif, date_mouvement, observation,
+                 id_vehicule_sous_location, id_sous_location,
+                 id_mouvement_depart, id_commercial)
+               VALUES ('RETOUR_LOCATION', 'LOCATION', ?, ?, ?, ?, ?, ?)`,
+              [
+                sqlDateTime(nextReturnDate ?? nextEndDate),
+                `Retour de sous-location ${input.reference?.trim() || current.reference}`,
+                current.vehiculeSousLocationId,
+                id,
+                departureId,
+                input.commercialId === undefined
+                  ? current.commercialId
+                  : input.commercialId,
+              ],
+            )
+          }
+        } else if (returns[0]) {
+          await connection.query(
+            "DELETE FROM mouvement_vehicule WHERE id_mouvement = ?",
+            [num(returns[0].id_mouvement)],
+          )
+        }
+      }
+      await connection.query(
+        "UPDATE vehicule_sous_location SET statut = ? WHERE id_vehicule_sous_location = ?",
+        [
+          nextStatus === "TERMINEE" ? "RETOUR_LOCATION" : "MISE_EN_LOCATION",
+          current.vehiculeSousLocationId,
+        ],
+      )
+    })
+    return (await this.list()).find((location) => location.id === id) ?? null
+  }
+
+  async overlapping(
+    vehiculeSousLocationId: number,
+    debut: string,
+    fin: string,
+  ): Promise<SousLocation[]> {
+    const rows = await query<Row>(
+      this.pool,
+      `SELECT l.id_sous_location AS id, l.numero_contrat AS reference,
+              l.id_client AS client_id, l.id_vehicule_sous_location AS vehicle_id,
+              v.immatriculation, l.id_commercial AS commercial_id,
+              l.type_location, l.date_debut, l.date_fin_prevue, l.montant_total,
+              l.statut, l.observation, l.mode_paiement_import,
+              l.reference_facture_import, l.date_facturation_import,
+              l.date_paiement_import, l.statut_paiement, l.paye_import
+         FROM sous_location l
+         JOIN vehicule_sous_location v
+           ON v.id_vehicule_sous_location = l.id_vehicule_sous_location
+        WHERE l.id_vehicule_sous_location = ?
+          AND l.statut IN ('EN_COURS', 'EN_RETARD', 'EN_PROLONGATION')
+          AND l.date_debut < ? AND ? < l.date_fin_prevue`,
+      [vehiculeSousLocationId, fin, debut],
+    )
+    const allLocations = await this.list()
+    const overlaps = new Set(rows.map((row) => num(row.id)))
+    return allLocations.filter((location) => overlaps.has(location.id))
+  }
+
+  async remove(id: number): Promise<boolean> {
+    const current = (await this.list()).find((location) => location.id === id)
+    if (!current) return false
+
+    return inTransaction(this.pool, async (connection) => {
+      const [result] = await connection.query(
+        "DELETE FROM sous_location WHERE id_sous_location = ?",
+        [id],
+      )
+      if (Number((result as mysql.ResultSetHeader).affectedRows) === 0) {
+        return false
+      }
+
+      const remaining = await query<Row>(
+        connection,
+        `SELECT COUNT(*) AS total
+           FROM sous_location
+          WHERE id_vehicule_sous_location = ?
+            AND statut IN ('EN_COURS', 'EN_RETARD', 'EN_PROLONGATION')`,
+        [current.vehiculeSousLocationId],
+      )
+      await connection.query(
+        "UPDATE vehicule_sous_location SET statut = ? WHERE id_vehicule_sous_location = ?",
+        [
+          num(remaining[0]?.total) > 0
+            ? "MISE_EN_LOCATION"
+            : "RETOUR_LOCATION",
+          current.vehiculeSousLocationId,
+        ],
+      )
+      return true
+    })
   }
 }
 
@@ -3877,6 +4446,9 @@ class MysqlMouvementRepo implements MouvementRepo {
 
   async list(vehiculeId?: number): Promise<Mouvement[]> {
     let sql = `SELECT d.id_mouvement AS id, d.id_vehicule AS vehicule_id,
+                      d.id_vehicule_sous_location AS sous_vehicle_id,
+                      d.id_sous_location AS sous_location_id,
+                      COALESCE(v.immatriculation, sv.immatriculation) AS immatriculation,
                       d.id_location AS location_id, d.id_passage AS passage_id,
                       d.id_commercial AS commercial_id, d.id_validateur AS validateur_id,
                       d.type_mouvement AS type, d.motif, d.kilometrage, d.date_mouvement,
@@ -3887,6 +4459,9 @@ class MysqlMouvementRepo implements MouvementRepo {
                       CASE WHEN d.type_mouvement IN ('MISE_EN_LOCATION','SORTIE_INTERNE','ENVOI_GARAGE')
                            THEN d.kilometrage ELSE p.kilometrage END AS km_depart
                  FROM mouvement_vehicule d
+                 LEFT JOIN vehicule v ON v.id_vehicule = d.id_vehicule
+                 LEFT JOIN vehicule_sous_location sv
+                   ON sv.id_vehicule_sous_location = d.id_vehicule_sous_location
                  LEFT JOIN mouvement_vehicule r ON r.id_mouvement_depart = d.id_mouvement
                  LEFT JOIN mouvement_vehicule p ON p.id_mouvement = d.id_mouvement_depart`
 
@@ -3905,7 +4480,13 @@ class MysqlMouvementRepo implements MouvementRepo {
     return rows.map((r) => ({
       id: num(r.id),
 
-      vehiculeId: num(r.vehicule_id),
+      vehiculeId: numNull(r.vehicule_id),
+
+      vehiculeSousLocationId: numNull(r.sous_vehicle_id),
+
+      sousLocationId: numNull(r.sous_location_id),
+
+      immatriculation: strNull(r.immatriculation),
 
       locationId: numNull(r.location_id),
 
@@ -5111,6 +5692,8 @@ export function mysqlRepositories(pool: mysql.Pool): Repositories {
     commerciaux: new MysqlCommercialRepo(pool),
 
     locations: new MysqlLocationRepo(pool),
+
+    sousLocations: new MysqlSousLocationRepo(pool),
 
     prolongations: new MysqlProlongationRepo(pool),
 

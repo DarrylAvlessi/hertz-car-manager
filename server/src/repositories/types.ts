@@ -512,10 +512,18 @@ export interface Location {
   datePaiement?: string | null
 }
 
-export interface LocationFiche extends Location {
+export interface LocationFiche extends Omit<Location, "vehiculeId"> {
+  vehiculeId: number | null
+
   client: string
 
   vehicule: string
+
+  isSousLocation?: boolean
+
+  immatriculation?: string
+
+  sousLocationId?: number
 }
 
 export type ReservationStatut = "À venir" | "En cours" | "Terminée" | "Annulée"
@@ -717,7 +725,13 @@ export type MouvementType = "ENTREE_PARC" | "MISE_EN_LOCATION" | "RETOUR_LOCATIO
 export interface Mouvement {
   id: number
 
-  vehiculeId: number
+  vehiculeId: number | null
+
+  vehiculeSousLocationId?: number | null
+
+  sousLocationId?: number | null
+
+  immatriculation?: string | null
 
   locationId?: number | null
 
@@ -1054,6 +1068,106 @@ export interface LocationInput {
   datePaiement?: string | null
 
   prolongation?: ProlongationInput
+}
+
+export interface SousLocationVehicle
+  extends Omit<Vehicule, "id" | "marque" | "modele"> {
+  id: number
+
+  marque?: string | null
+
+  modele?: string | null
+}
+
+export type SousLocationVehicleInput = Pick<VehiculeInput, "immatriculation"> &
+  Omit<
+    Partial<Omit<VehiculeInput, "immatriculation">>,
+    "marque" | "modele"
+  > & {
+    marque?: string | null
+    modele?: string | null
+  }
+
+export interface SousLocation {
+  id: number
+
+  reference: string
+
+  clientId: number
+
+  vehiculeSousLocationId: number
+
+  immatriculation: string
+
+  commercialId: number | null
+
+  type: LocationType
+
+  dateDebut: string
+
+  dateFin: string
+
+  dateRetourReelle?: string | null
+
+  montant: number
+
+  statut: LocationStatut
+
+  observation?: string | null
+
+  modePaiement?: string | null
+
+  referenceFacture?: string | null
+
+  dateFacturation?: string | null
+
+  paye?: boolean | null
+
+  payeImport?: string | null
+
+  datePaiement?: string | null
+}
+
+export type SousLocationInput = Omit<
+  SousLocation,
+  "id" | "reference" | "immatriculation"
+> & {
+  reference?: string | null
+}
+
+export interface SousLocationRepo {
+  listVehicles(): Promise<SousLocationVehicle[]>
+
+  createVehicle(immatriculation: string, adminId?: number): Promise<number>
+
+  createVehicleRecord(
+    input: SousLocationVehicleInput,
+    adminId: number,
+  ): Promise<SousLocationVehicle>
+
+  updateVehicle(
+    id: number,
+    input: Partial<SousLocationVehicleInput>,
+  ): Promise<SousLocationVehicle | null>
+
+  removeVehicle(id: number): Promise<boolean>
+
+  list(): Promise<SousLocation[]>
+
+  create(input: SousLocationInput, adminId: number): Promise<SousLocation>
+
+  update(
+    id: number,
+    input: Partial<SousLocationInput>,
+  ): Promise<SousLocation | null>
+
+  overlapping(
+    vehiculeSousLocationId: number,
+    debut: string,
+    fin: string,
+  ): Promise<SousLocation[]>
+
+  remove(id: number): Promise<boolean>
 }
 
 export interface Prolongation {
@@ -1422,6 +1536,8 @@ export interface Repositories {
   commerciaux: CommercialRepo
 
   locations: LocationRepo
+
+  sousLocations: SousLocationRepo
 
   prolongations: ProlongationRepo
 

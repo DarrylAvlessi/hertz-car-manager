@@ -124,6 +124,22 @@ base existante, lancez ensuite :
 npm run migrate:internal-exits
 ```
 
+Pour activer l’import et le suivi des sous-locations sur une base existante,
+lancez depuis la racine :
+
+```bash
+npm run migrate:sous-locations
+```
+
+Les immatriculations absentes du parc sont présentées avant l’import afin de
+les classer en sous-location ou d’interrompre l’import pour les ajouter d’abord
+au parc. Les locations de sous-location apparaissent dans la liste et les
+exports de locations. La migration étend également les véhicules de
+sous-location et le journal commun des mouvements. Le module « Véhicules de
+sous-location » permet de les créer, modifier et supprimer; le retour est
+journalisé lorsque la location passe au statut « Terminée ». Les nouvelles
+bases créent les tables via `schema.sql`.
+
 ## Initialiser une nouvelle base vide
 
 Configurez `server/.env` avec `DB_DRIVER=mysql`, les identifiants MySQL et un
@@ -154,6 +170,7 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | `npm run db:migrate-reservation-lost-affairs` | crée une affaire perdue lors d'une annulation et prépare son export CSV |
 | `npm run db:migrate-contraventions` | ajoute les colonnes d'import requises par le module Contraventions |
 | `npm run db:migrate-admin-roles` | ajoute les rôles `responsable`, `admin` et `superadmin` aux comptes existants |
+| `npm run db:migrate-sous-locations` | crée/étend les véhicules et locations de sous-location et relie leurs mouvements au journal commun |
 | `npm run db:import-parc` | importe le jeu agents/parc une seule fois, avec contrôles et transaction |
 
 ## API (base `/api`, JWT Bearer sauf `/health`)
@@ -182,7 +199,11 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | POST/PUT/DELETE | `/commerciaux`, `/commerciaux/:id`  | resp | création, modification, désactivation    |
 | GET     | `/locations?q&limit`, `/locations/:id` | resp | fiches avec noms client/véhicule         |
 | POST    | `/locations`                           | resp | création LCD/LLD avec contrôle de disponibilité |
-| POST    | `/locations/import-csv`                | resp | import depuis le modèle Excel; crée les clients absents (type Particulier par défaut), résout véhicule et commercial, contrôle dates et disponibilité, conserve aussi les colonnes de suivi facturation/paiement |
+| PUT/DELETE | `/locations/sous-locations/:id`      | resp | modification et suppression des sous-locations |
+| GET/POST/PUT/DELETE | `/sous-locations/vehicules[/:id]` | resp | gestion des véhicules de sous-location, suppression protégée si référencé |
+| GET     | `/mouvements`                          | resp | journal commun des mouvements du parc et des sous-locations |
+| POST    | `/locations/import-csv/preview`        | resp | prévisualise les immatriculations absentes du parc avant confirmation |
+| POST    | `/locations/import-csv`                | resp | import depuis le modèle CSV/Excel; les heures de départ/retour (HH:MM) sont facultatives pour compatibilité avec les anciens fichiers, absentes elles couvrent la journée; crée les clients absents, demande de classer les immatriculations inconnues en sous-location ou refuse leur import jusqu'à leur ajout au parc, et conserve la facturation/paiement |
 | GET     | `/reservations`, `/reservations/:id`   | resp | fiches avec noms client/commercial       |
 | GET/POST | `/contraventions`                    | resp | liste et création des contraventions      |
 | PUT/DELETE | `/contraventions/:id`               | resp | modification et suppression               |
@@ -196,8 +217,10 @@ réimportations. N'exécutez pas directement le fichier SQL d'import.
 | GET     | `/maintenances`, `/maintenances/:id`   | resp | passages garage                          |
 | GET     | `/mouvements?vehiculeId`               | resp | flux chronologiques                      |
 | GET     | `/stats/overview`, `/stats/monthly`, `/stats/daily`, `/stats/fleet-status` | resp | KPIs + série mensuelle + quotidiens + état de la flotte |
+| GET     | `/stats/bilan?scope=parc\|sous-location&agenceId` | resp | bilan détaillé par périmètre et agence ; l'agence filtre les contrats via le commercial, pas les véhicules |
 | GET     | `/export/clients/:id/fiche`            | resp | fiche client PDF (token header ou `?token=`) |
 | GET     | `/export/rapports/activite?debut&fin`  | resp | rapport d'activité PDF                   |
+| GET     | `/export/rapports/bilan-statistique?scope=parc\|sous-location&agenceId` | resp | visualisation ou téléchargement du bilan PDF par périmètre et agence |
 
 Conventions d'erreur : `{error, details}` avec 400 (zod), 401, 403, 404, 409, 500.
 

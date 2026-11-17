@@ -11,6 +11,8 @@ export const ROUTES = {
 
   vehicules: "/dashboard/vehicules",
 
+  vehiculesSousLocation: "/dashboard/parc/vehicules-sous-location",
+
   categoriesVehicules: "/dashboard/parc/categories",
 
   modelesVehicules: "/dashboard/parc/modeles",
